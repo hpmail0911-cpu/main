@@ -13,6 +13,7 @@ strategy("TL43 Alerts-Only (Strict Direction) - Live Safe", overlay=true, initia
 group_mode = "Mode"
 alertOnlyMode = input.bool(true, "ALERTS ONLY (live)", group=group_mode, tooltip="When ON, no strategy orders are placed. The script uses a shadow position to avoid firing opposite entries while live.")
 barCloseConfirm = input.bool(true, "Confirm on bar close (recommended)", group=group_mode, tooltip="When ON, signals only fire on confirmed bars (reduces intrabar whipsaws / false flips).")
+emitExitAlerts = input.bool(false, "Emit explicit EXIT alerts (advanced)", group=group_mode, tooltip="OFF by default. Only enable if your TradersPost bot expects/handles explicit close/flatten messages.")
 
 // -------------------------
 // Symbol / sizing
@@ -105,6 +106,7 @@ webhookTicker = input.string("{{ticker}}", "ticker (default {{ticker}})", group=
 strategyTag = input.string("TL43_STRICT_DIRECTION", "strategy tag", group=group_webhook)
 sendDollarStops = input.bool(true, "Send stop_loss_amount / take_profit_amount ($)", group=group_webhook)
 sendLimitFields = input.bool(true, "Send order_type + limit_price", group=group_webhook)
+closeAction = input.string("close", "Exit action field value", group=group_webhook, tooltip="Used only if 'Emit explicit EXIT alerts' is enabled.")
 
 // Stop update alerts (for trailing after breakeven)
 enableStopUpdateAlerts = input.bool(false, "Send STOP UPDATE alerts (advanced)", group=group_webhook, tooltip="Only enable if your TradersPost bot is configured to interpret update actions.")
@@ -167,6 +169,7 @@ var float shadowSL = na
 var float shadowTP = na
 var int shadowEntryBar = na
 var bool beArmed = false
+var string shadowId = ""
 
 inPos = alertOnlyMode ? shadowPos != 0 : strategy.position_size != 0
 isLongPos = alertOnlyMode ? shadowPos == 1 : strategy.position_size > 0
@@ -175,19 +178,25 @@ isShortPos = alertOnlyMode ? shadowPos == -1 : strategy.position_size < 0
 // Auto-clear shadow position when bracket levels are crossed (keeps state in sync when broker exits)
 if alertOnlyMode and inPos and not na(shadowSL) and not na(shadowTP)
     if isLongPos and (low <= shadowSL or high >= shadowTP)
+        if emitExitAlerts and enableAlerts
+            alert(makeExitJson(shadowId), alert.freq_once_per_bar)
         shadowPos := 0
         shadowEntry := na
         shadowSL := na
         shadowTP := na
         shadowEntryBar := na
         beArmed := false
+        shadowId := ""
     if isShortPos and (high >= shadowSL or low <= shadowTP)
+        if emitExitAlerts and enableAlerts
+            alert(makeExitJson(shadowId), alert.freq_once_per_bar)
         shadowPos := 0
         shadowEntry := na
         shadowSL := na
         shadowTP := na
         shadowEntryBar := na
         beArmed := false
+        shadowId := ""
 
 // -------------------------
 // Entry logic (quality first)
@@ -233,11 +242,14 @@ calcShortBracket(sigPrice) =>
 // -------------------------
 // Alert helpers (numeric JSON)
 // -------------------------
-makeEntryJson(_action, _qty, _sigPrice, _limitPrice, _sl, _tp, _signalType) =>
+makeEntryJson(_action, _qty, _sigPrice, _entryRef, _limitPrice, _sl, _tp, _signalType, _id) =>
     // IMPORTANT: numeric fields are NOT quoted (TradersPost parsers can fail on quoted numbers).
     s = '{"ticker":"' + webhookTicker + '","action":"' + _action + '"'
     s += ',"quantity":' + str.tostring(_qty)
+    // Keep `price` as the signal price for compatibility; also include explicit fields.
     s += ',"price":' + str.tostring(_sigPrice, format.mintick)
+    s += ',"signal_price":' + str.tostring(_sigPrice, format.mintick)
+    s += ',"entry_ref":' + str.tostring(_entryRef, format.mintick)
     s += ',"stop_loss":' + str.tostring(_sl, format.mintick)
     s += ',"take_profit":' + str.tostring(_tp, format.mintick)
     if sendLimitFields
@@ -245,20 +257,32 @@ makeEntryJson(_action, _qty, _sigPrice, _limitPrice, _sl, _tp, _signalType) =>
         if useLimitEntry
             s += ',"limit_price":' + str.tostring(_limitPrice, format.mintick)
     if sendDollarStops
-        s += ',"stop_loss_amount":' + str.tostring(priceDiffToDollars(_sigPrice, _sl), "#.##")
-        s += ',"take_profit_amount":' + str.tostring(priceDiffToDollars(_tp, _sigPrice), "#.##")
+        s += ',"stop_loss_amount":' + str.tostring(priceDiffToDollars(_entryRef, _sl), "#.##")
+        s += ',"take_profit_amount":' + str.tostring(priceDiffToDollars(_tp, _entryRef), "#.##")
     s += ',"strategy":"' + strategyTag + '"'
     s += ',"timeframe":"' + timeframe.period + '"'
     s += ',"signal_type":"' + _signalType + '"'
+    s += ',"signal_id":"' + _id + '"'
     s += ',"mtf_alignment_pct":' + str.tostring(mtfPct)
     s += ',"strict_candle":' + (requireStrictCandle ? "true" : "false")
     s += ',"chop":' + (isChop ? "true" : "false")
     s += '}'
     s
 
-makeStopUpdateJson(_newSL) =>
+makeStopUpdateJson(_newSL, _id) =>
     s = '{"ticker":"' + webhookTicker + '","action":"' + updateAction + '"'
     s += ',"stop_loss":' + str.tostring(_newSL, format.mintick)
+    if _id != ""
+        s += ',"signal_id":"' + _id + '"'
+    s += ',"strategy":"' + strategyTag + '"'
+    s += ',"timeframe":"' + timeframe.period + '"'
+    s += '}'
+    s
+
+makeExitJson(_id) =>
+    s = '{"ticker":"' + webhookTicker + '","action":"' + closeAction + '"'
+    if _id != ""
+        s += ',"signal_id":"' + _id + '"'
     s += ',"strategy":"' + strategyTag + '"'
     s += ',"timeframe":"' + timeframe.period + '"'
     s += '}'
@@ -269,33 +293,39 @@ makeStopUpdateJson(_newSL) =>
 // -------------------------
 if enableAlerts and enterLong
     sigPrice = close
-    [sl, tp] = calcLongBracket(sigPrice)
     limitPrice = useLimitEntry ? (sigPrice + slipLimit) : sigPrice
+    entryRef = useLimitEntry ? limitPrice : sigPrice
+    [sl, tp] = calcLongBracket(entryRef)
+    id = str.tostring(time) + "_L"
     if alertOnlyMode
         shadowPos := 1
-        shadowEntry := sigPrice
+        shadowEntry := entryRef
         shadowSL := sl
         shadowTP := tp
         shadowEntryBar := bar_index
         beArmed := false
+        shadowId := id
     else
         strategy.entry("LONG", strategy.long, qty=fixedQty)
-    alert(makeEntryJson("buy", fixedQty, sigPrice, limitPrice, sl, tp, impulseLongSignal ? "IMPULSE" : "STANDARD"), alert.freq_once_per_bar)
+    alert(makeEntryJson("buy", fixedQty, sigPrice, entryRef, limitPrice, sl, tp, impulseLongSignal ? "IMPULSE" : "STANDARD", id), alert.freq_once_per_bar)
 
 if enableAlerts and enterShort
     sigPrice = close
-    [sl, tp] = calcShortBracket(sigPrice)
     limitPrice = useLimitEntry ? (sigPrice - slipLimit) : sigPrice
+    entryRef = useLimitEntry ? limitPrice : sigPrice
+    [sl, tp] = calcShortBracket(entryRef)
+    id = str.tostring(time) + "_S"
     if alertOnlyMode
         shadowPos := -1
-        shadowEntry := sigPrice
+        shadowEntry := entryRef
         shadowSL := sl
         shadowTP := tp
         shadowEntryBar := bar_index
         beArmed := false
+        shadowId := id
     else
         strategy.entry("SHORT", strategy.short, qty=fixedQty)
-    alert(makeEntryJson("sell", fixedQty, sigPrice, limitPrice, sl, tp, impulseShortSignal ? "IMPULSE" : "STANDARD"), alert.freq_once_per_bar)
+    alert(makeEntryJson("sell", fixedQty, sigPrice, entryRef, limitPrice, sl, tp, impulseShortSignal ? "IMPULSE" : "STANDARD", id), alert.freq_once_per_bar)
 
 // -------------------------
 // Breakeven then trailing stop (shadow + optional stop-update alert)
@@ -312,18 +342,21 @@ if inPos and not na(shadowEntry)
             shadowSL := newSL
             beArmed := true
         if enableStopUpdateAlerts and enableAlerts
-            alert(makeStopUpdateJson(newSL), alert.freq_once_per_bar)
+            alert(makeStopUpdateJson(newSL, shadowId), alert.freq_once_per_bar)
 
     // Trail after BE
     if enableTrailAfterBE and beArmed
         trailDist = atr * trailATR
-        trailedSL = isLongPos ? (close - trailDist) : (close + trailDist)
+        // Add stop buffer in trailing too, to reduce stop-out from fast prints/slippage.
+        trailedSL = isLongPos ? (close - trailDist - slipStop) : (close + trailDist + slipStop)
         newSL2 = isLongPos ? math.max(shadowSL, trailedSL) : math.min(shadowSL, trailedSL)
         if newSL2 != shadowSL
             if alertOnlyMode
                 shadowSL := newSL2
             if enableStopUpdateAlerts and enableAlerts
-                alert(makeStopUpdateJson(newSL2), alert.freq_once_per_bar)
+                alert(makeStopUpdateJson(newSL2, shadowId), alert.freq_once_per_bar)
+
+// (Exit alerts are emitted at the moment shadow brackets are crossed, above.)
 
 // -------------------------
 // Visuals

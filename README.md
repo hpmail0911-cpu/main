@@ -29,8 +29,18 @@ This repo’s script fixes that by tracking a **shadow position** (`shadowPos`, 
 Many webhook parsers are picky about types. This script emits:
 
 - **numeric fields unquoted**: `"stop_loss": 24621.75` not `"stop_loss":"24621.75"`
+- `signal_id` on entries (and optionally on stop updates/exits) so your automation can correlate messages
 - optional `"order_type":"limit"` and `"limit_price": ...` fields for slippage control
 - optional `stop_loss_amount`/`take_profit_amount` dollar offsets (computed using `syminfo.pointvalue`)
+
+## Trailing stops with TradersPost (important)
+
+Broker-side trailing requires **updating the stop** after entry. This script can emit optional stop-update alerts:
+
+- Enable `Send STOP UPDATE alerts (advanced)`
+- Ensure your TradersPost bot is configured to treat the `action` (default `"update"`) as a stop update, **not** as a new entry.
+
+If your TradersPost bot does **not** support stop updates, keep stop updates disabled and rely on broker brackets (static SL/TP).
 
 ## Recommended “perfect setup” checklist (practical, not a guarantee)
 
@@ -42,6 +52,7 @@ Many webhook parsers are picky about types. This script emits:
 
 - **Execution**
   - Prefer **LIMIT entries** with a small allowed slippage window.
+    - This script uses a *marketable limit cap* (buy limit slightly above / sell limit slightly below) to reduce catastrophic slippage while still filling quickly.
   - Add a small **stop buffer** (ticks) to survive spread/fast prints.
   - Use **ATR brackets** on volatile symbols; use fixed brackets only if you’ve validated they fit that instrument’s behavior.
 
