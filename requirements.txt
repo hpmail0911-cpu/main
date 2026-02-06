@@ -1,0 +1,5 @@
+# Contract Resolver - Fixes ContractNotActive errors
+# No external dependencies required for core functionality
+# pytest is only needed for running tests
+
+pytest>=7.0.0
