@@ -694,7 +694,7 @@ getManualAlertTicker() =>
     manual != "" and manual != "{{ticker}}" ? manual : ""
 
 isContinuousTicker(sym) =>
-    str.ends_with(sym, "!")
+    str.endswith(sym, "!")
 
 getMgcActiveContract() =>
     int curMonth = month
