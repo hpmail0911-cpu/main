@@ -1,0 +1,34 @@
+//@version=5
+// Snippet: fix for `Syntax error at input ',"reason":"max_holding_time"'`
+//
+// Root cause: the line before `"reason"` was missing a `+` operator,
+// breaking multiline string concatenation.
+//
+// Apply the same fix in BOTH long and short max-holding exit alert blocks.
+
+// LONG example (correct)
+longExitAlertExample(alertSymbol, holdingPeriod) =>
+    exitAlert = '{"ticker":"' + alertSymbol + '"' +
+        ',"action":"exit"' +
+        ',"intent":"CLOSE"' + // critical `+`
+        ',"reason":"max_holding_time"' +
+        ',"side":"long"' +
+        ',"holding_bars":' + str.tostring(holdingPeriod) +
+        ',"signal_id":"' + "MAXTIME_LONG" + '"' +
+        ',"timestamp":"' + str.tostring(time) + '"' +
+        '}'
+    exitAlert
+
+// SHORT example (correct)
+shortExitAlertExample(alertSymbol, holdingPeriod) =>
+    exitAlert = '{"ticker":"' + alertSymbol + '"' +
+        ',"action":"exit"' +
+        ',"intent":"CLOSE"' + // critical `+`
+        ',"reason":"max_holding_time"' +
+        ',"side":"short"' +
+        ',"holding_bars":' + str.tostring(holdingPeriod) +
+        ',"signal_id":"' + "MAXTIME_SHORT" + '"' +
+        ',"timestamp":"' + str.tostring(time) + '"' +
+        '}'
+    exitAlert
+
