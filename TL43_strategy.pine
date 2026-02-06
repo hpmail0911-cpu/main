@@ -20,7 +20,7 @@ impulseATRMult = input.float(1.10, "Impulse Move ATR Multiple", minval=0.3, maxv
 impulseVolMult = input.float(1.80, "Impulse Volume Multiple", minval=1.0, maxval=10.0, step=0.05, group=group_entryConfirm)
 
 // === CONFLUENCE LEVEL CONTROL (1-15) ===
-confluenceLevel = input.int(10, "Confluence Level (1=Loose, 15=Strict)", minval=1, maxval=15)
+confluenceLevel = input.int(11, "Confluence Level (1=Loose, 15=Strict)", minval=1, maxval=15)
 
 // === STRONG TREND OVERRIDE ===
 enableTrendOverride = input.bool(true, "Enable Strong Trend Override", group="Trend Override")
@@ -238,8 +238,8 @@ require5Star = input.bool(false, "V8: Require 5-Star Entry Gate", group="V8 Safe
 minMESRangePoints = input.float(5.0, "V8: Min MES Range (points) for Star 4", group="V8 Safety")
 usePointRangeCheck = input.bool(true, "V8: Enable Min Range Check for Star 4", group="V8 Safety")
 minStarsRequired = input.int(3, "V8: Minimum Stars Required (1-5)", minval=1, maxval=5, group="V8 Safety")
-enableMTF = input.bool(false, "V8: Enable Multi-Timeframe Checks (15m/60m/240m)", group="V8 Safety")
-mtfMode = input.string("Filter", "V8: MTF Mode", options=["Confirmation", "Filter", "Advisory"], group="V8 Safety")
+enableMTF = input.bool(true, "V8: Enable Multi-Timeframe Checks (15m/60m/240m)", group="V8 Safety")
+mtfMode = input.string("Confirmation", "V8: MTF Mode", options=["Confirmation", "Filter", "Advisory"], group="V8 Safety")
 mtf_tf1 = input.timeframe("15", "V8: MTF 1", group="V8 Safety")
 mtf_tf2 = input.timeframe("60", "V8: MTF 2", group="V8 Safety")
 mtf_tf3 = input.timeframe("240", "V8: MTF 3", group="V8 Safety")
