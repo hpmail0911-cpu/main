@@ -1,0 +1,126 @@
+//@version=5
+// TL32 EXIT FIX BLOCKS (v5)
+//
+// PURPOSE:
+// Fixes the two misfiring exits you reported:
+// - "mae_protection"
+// - "max_profit_drawdown"
+//
+// CORE FIXES:
+// 1) Max-profit-drawdown is ARMED only after meaningful peak profit:
+//    peakProfit >= currentBreakevenTrigger * drawdownArmMultiplier
+//    (prevents early/false drawdown exits after tiny 1-tick peaks)
+// 2) Single priority exit selection (one reason per bar/position):
+//    hard stop -> max loss -> end of day -> MAE -> max drawdown -> time profit -> losing -> reversal -> max holding
+//    (prevents drawdown alert from blocking MAE/max-loss alerts via anyExitAlertSent)
+// 3) MAE arming is consistent everywhere (no hidden multipliers).
+//
+// HOW TO USE:
+// - Paste the INPUTS into your "Profit Protection" section.
+// - Paste the CALC + PRIORITY EXIT CHAIN where you currently compute:
+//   maxDrawdownReached, maeExitCondition, maxLossCondition, and where you send exit alerts.
+// - Use the selectedExitReason/Label for BOTH alert + strategy.close_all to keep backtest aligned.
+//
+// EXPECTED EXISTING VARIABLES IN YOUR SCRIPT:
+// peakProfit, currentProfitDollars, currentMaeTrigger, currentBreakevenTrigger, currentMaxLoss,
+// barsInPosition, maeDrawbackPercent, maxProfitDrawdownPercent,
+// useMaxProfitDrawdown, useTimeProfitProtection, timeProfitThreshold,
+// useLosingTradeAutoClose, losingTradeThreshold,
+// enableHardStopProtection, hardStopHit,
+// endOfDayExit, maxHoldingReached, holdingPeriod, maxHoldingBars,
+// signalReversalLong, signalReversalShort,
+// enableTradersPostAlerts, alertSentForCurrentPosition, anyExitAlertSent,
+// getAlertTicker(), actualContractQty.
+//
+// This file is a reference snippet; it is not meant to run standalone.
+
+indicator("TL32 Exit Fix Blocks (Reference Only)", overlay=false)
+
+// === INPUTS (PASTE into Profit Protection group) ===
+drawdownArmMultiplier = input.float(1.0, "Drawdown Arm (x Breakeven $ Trigger)", minval=0.5, maxval=3.0, group="Profit Protection")
+maeArmMultiplier = input.float(1.0, "MAE Arm (x MAE $ Trigger)", minval=0.5, maxval=2.0, group="Profit Protection")
+
+// === EXAMPLE PLACEHOLDERS (DELETE in your strategy) ===
+// These let this snippet compile if opened directly.
+var float peakProfit = 0.0
+var float currentProfitDollars = 0.0
+var float currentMaeTrigger = 25.0
+var float currentBreakevenTrigger = 20.0
+var float currentMaxLoss = 55.0
+var int barsInPosition = 0
+var float maeDrawbackPercent = 0.75
+var float maxProfitDrawdownPercent = 30.0
+var bool useMaxProfitDrawdown = true
+var bool useTimeProfitProtection = true
+var int timeProfitThreshold = 15
+var bool useLosingTradeAutoClose = true
+var float losingTradeThreshold = 2.0
+var bool enableHardStopProtection = true
+var bool hardStopHit = false
+var bool endOfDayExit = false
+var bool maxHoldingReached = false
+var int holdingPeriod = 0
+var int maxHoldingBars = 25
+var bool signalReversalLong = false
+var bool signalReversalShort = false
+var bool enableTradersPostAlerts = true
+var bool alertSentForCurrentPosition = true
+var bool anyExitAlertSent = false
+var int actualContractQty = 1
+getAlertTicker() => syminfo.ticker
+
+// === FIXED CALCS ===
+drawdownArmDollars = currentBreakevenTrigger * drawdownArmMultiplier
+profitDrawdownPercent = peakProfit > 0 ? ((peakProfit - currentProfitDollars) / peakProfit) * 100 : 0
+maxDrawdownReached = useMaxProfitDrawdown and peakProfit >= drawdownArmDollars and profitDrawdownPercent >= maxProfitDrawdownPercent and barsInPosition >= 2
+
+maeArmDollars = currentMaeTrigger * maeArmMultiplier
+maeExitCondition = peakProfit >= maeArmDollars and currentProfitDollars < (peakProfit * maeDrawbackPercent) and barsInPosition >= 3
+
+maxLossCondition = math.abs(currentProfitDollars) >= currentMaxLoss and currentProfitDollars < 0 and barsInPosition >= 2
+hardStopCondition = enableHardStopProtection and hardStopHit and barsInPosition >= 2
+
+// === SINGLE PRIORITY EXIT DECISION ===
+selectedExitReason = ""
+selectedExitLabel = ""
+
+if barsInPosition >= 1
+    if hardStopCondition
+        selectedExitReason := "emergency_hard_stop"
+        selectedExitLabel := "HARD STOP"
+    else if maxLossCondition
+        selectedExitReason := "max_loss_exceeded"
+        selectedExitLabel := "MAX LOSS"
+    else if endOfDayExit
+        selectedExitReason := "end_of_day"
+        selectedExitLabel := "EOD"
+    else if maeExitCondition
+        selectedExitReason := "mae_protection"
+        selectedExitLabel := "MAE"
+    else if maxDrawdownReached
+        selectedExitReason := "max_profit_drawdown"
+        selectedExitLabel := "DRAWDOWN"
+    else if useTimeProfitProtection and holdingPeriod >= timeProfitThreshold and currentProfitDollars > 0
+        selectedExitReason := "time_profit_protection"
+        selectedExitLabel := "TIME PROFIT"
+    else if useLosingTradeAutoClose and barsInPosition >= 2 and currentProfitDollars < 0 and losingTradeThreshold > 0
+        selectedExitReason := "losing_trade_auto_close"
+        selectedExitLabel := "LOSING"
+    else if signalReversalLong
+        selectedExitReason := "signal_reversal_long_to_short"
+        selectedExitLabel := "REVERSAL"
+    else if signalReversalShort
+        selectedExitReason := "signal_reversal_short_to_long"
+        selectedExitLabel := "REVERSAL"
+    else if maxHoldingReached and holdingPeriod >= maxHoldingBars
+        selectedExitReason := "max_holding_time"
+        selectedExitLabel := "MAX HOLD"
+
+// === EXIT ALERT SEND (use in your strategy) ===
+shouldSendExitAlert = enableTradersPostAlerts and alertSentForCurrentPosition and not anyExitAlertSent and selectedExitReason != ""
+if shouldSendExitAlert
+    exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "' + selectedExitReason + '"}'
+    // In your strategy: alert(exitMessage, alert.freq_once_per_bar)
+    anyExitAlertSent := true
+
+plotchar(selectedExitReason != "" ? 1 : 0, title="Exit Selected", char="X")
