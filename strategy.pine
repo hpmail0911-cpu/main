@@ -745,10 +745,12 @@ calculateSlippageBuffer() =>
 validQtyForAlert = strategy.position_size != 0
 actualContractQty = strategy.position_size != 0 ? int(math.max(math.abs(strategy.position_size), 1)) : 0
 var bool alertSentForCurrentPosition = false
-if strategy.position_size != 0 and strategy.position_size[1] == 0
-    alertSentForCurrentPosition := false
 if strategy.position_size == 0 and strategy.position_size[1] != 0
     alertSentForCurrentPosition := false
+if alertOnlyMode and alertSentForCurrentPosition
+    currentTimeSeconds = int(time / 1000)
+    if currentTimeSeconds - lastAlertTime >= cooldownSeconds
+        alertSentForCurrentPosition := false
 
 if longCondition and enableTradersPostAlerts and strategy.position_size == 0 and finalContractQty > 0 and not alertSentForCurrentPosition and canSendAlert("LONG")
     dynamicSL = close - (safeATR * currentInitialStopATR)
@@ -770,6 +772,39 @@ if longCondition and enableTradersPostAlerts and strategy.position_size == 0 and
       '", "instrument": "' + instrumentName +
       '", "signal_type": "' + activeSignalType +
       '"}'
+    alert(longEntryMessage, alert.freq_once_per_bar)
+    alertSentForCurrentPosition := true
+    lastAlertBar := bar_index
+    lastAlertPrice := close
+    lastAlertType := "LONG"
+    lastAlertTime := int(time / 1000)
+
+if shortCondition and enableTradersPostAlerts and strategy.position_size == 0 and finalContractQty > 0 and not alertSentForCurrentPosition and canSendAlert("SHORT")
+    dynamicSL = close + (safeATR * currentInitialStopATR)
+    dynamicTP = close - (safeATR * tpMultiplier * (highWinRateMode ? quickTPMultiplier : 1.0))
+
+    stopLossPoints := int(math.round((dynamicSL - close) / syminfo.mintick))
+    takeProfitPoints := int(math.round((close - dynamicTP) / syminfo.mintick))
+    trailStopPoints := int(math.round(stopLossPoints * 0.6))
+    alertQuantity = enforceMaxContracts ? math.min(finalContractQty, maxContractsGlobal) : finalContractQty
+
+    shortEntryMessage = '{"ticker": "' + getAlertTicker() +
+      '", "action": "sell"' +
+      ', "orderType": "market"' +
+      ', "quantity": ' + str.tostring(alertQuantity) +
+      ', "stop_loss": ' + str.tostring(stopLossPoints) +
+      ', "take_profit": ' + str.tostring(takeProfitPoints) +
+      ', "trailing_stop": ' + str.tostring(trailStopPoints) +
+      ', "timeframe": "' + timeframe.period +
+      '", "instrument": "' + instrumentName +
+      '", "signal_type": "' + activeSignalType +
+      '"}'
+    alert(shortEntryMessage, alert.freq_once_per_bar)
+    alertSentForCurrentPosition := true
+    lastAlertBar := bar_index
+    lastAlertPrice := close
+    lastAlertType := "SHORT"
+    lastAlertTime := int(time / 1000)
 
 // === EXIT ALERT TRACKING ===
 var bool drawdownAlertFired = false
@@ -795,53 +830,61 @@ if strategy.position_size == 0 and strategy.position_size[1] != 0
     hardStopAlertFired := false
     anyExitAlertSent := false
 
-if maxDrawdownReached and not drawdownAlertFired and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
+if maxDrawdownReached and not drawdownAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "max_profit_drawdown"}'
     alert(exitMessage, alert.freq_once_per_bar)
     drawdownAlertFired := true
     anyExitAlertSent := true
 
-if timeThresholdReached and not timeProfitAlertFired and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= timeProfitThreshold and enableTradersPostAlerts
+if timeThresholdReached and not timeProfitAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= timeProfitThreshold and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "time_profit_protection"}'
     alert(exitMessage, alert.freq_once_per_bar)
     timeProfitAlertFired := true
+    anyExitAlertSent := true
 
-if losingTradeReached and not losingTradeAlertFired and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
+if losingTradeReached and not losingTradeAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "losing_trade_auto_close"}'
     alert(exitMessage, alert.freq_once_per_bar)
     losingTradeAlertFired := true
+    anyExitAlertSent := true
 
-if signalReversalLong and not reversalAlertFired and strategy.position_size > 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
+if signalReversalLong and not reversalAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size > 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "signal_reversal_long_to_short"}'
     alert(exitMessage, alert.freq_once_per_bar)
     reversalAlertFired := true
+    anyExitAlertSent := true
 
-if signalReversalShort and not reversalAlertFired and strategy.position_size < 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
+if signalReversalShort and not reversalAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size < 0 and validQtyForAlert and barsInPosition >= 2 and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "signal_reversal_short_to_long"}'
     alert(exitMessage, alert.freq_once_per_bar)
     reversalAlertFired := true
+    anyExitAlertSent := true
 
-if endOfDayExit and not eodAlertFired and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= 1 and enableTradersPostAlerts
+if endOfDayExit and not eodAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and barsInPosition >= 1 and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "end_of_day"}'
     alert(exitMessage, alert.freq_once_per_bar)
     eodAlertFired := true
+    anyExitAlertSent := true
 
-if maxHoldingReached and not timeExitAlertFired and strategy.position_size != 0 and validQtyForAlert and holdingPeriod >= maxHoldingBars and enableTradersPostAlerts
+if maxHoldingReached and not timeExitAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and holdingPeriod >= maxHoldingBars and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "max_holding_time"}'
     alert(exitMessage, alert.freq_once_per_bar)
     timeExitAlertFired := true
+    anyExitAlertSent := true
 
 maeExitCondition = peakProfit > currentMaeTrigger and currentProfitDollars < (peakProfit * maeDrawbackPercent) and barsInPosition >= 3
-if maeExitCondition and not maeExitAlertFired and strategy.position_size != 0 and validQtyForAlert and enableTradersPostAlerts
+if maeExitCondition and not maeExitAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "mae_protection"}'
     alert(exitMessage, alert.freq_once_per_bar)
     maeExitAlertFired := true
+    anyExitAlertSent := true
 
 maxLossCondition = math.abs(currentProfitDollars) > currentMaxLoss and currentProfitDollars < 0 and barsInPosition >= 2
-if maxLossCondition and not maxLossAlertFired and strategy.position_size != 0 and validQtyForAlert and enableTradersPostAlerts
+if maxLossCondition and not maxLossAlertFired and not anyExitAlertSent and alertSentForCurrentPosition and strategy.position_size != 0 and validQtyForAlert and enableTradersPostAlerts
     exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualContractQty) + '", "reason": "max_loss_exceeded"}'
     alert(exitMessage, alert.freq_once_per_bar)
     maxLossAlertFired := true
+    anyExitAlertSent := true
 
 // === STRATEGY EXECUTION ===
 if not alertOnlyMode
@@ -868,7 +911,7 @@ if not alertOnlyMode and strategy.position_size != 0 and not na(entryPrice) and 
     if enableHardStopProtection and hardStopHit and barsInPosition >= 2
         emergencyExit := true
         emergencyReason := "HARD STOP $55"
-        if enableTradersPostAlerts and not hardStopAlertFired
+        if enableTradersPostAlerts and not hardStopAlertFired and not anyExitAlertSent and alertSentForCurrentPosition
             emergencyExitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "emergency_hard_stop", "loss_dollars": ' + str.tostring(currentProfitDollars, "#.##") + '}'
             alert(emergencyExitMessage, alert.freq_once_per_bar)
             hardStopAlertFired := true
@@ -877,7 +920,7 @@ if not alertOnlyMode and strategy.position_size != 0 and not na(entryPrice) and 
     if not emergencyExit and math.abs(currentProfitDollars) >= currentMaxLoss and currentProfitDollars < 0 and barsInPosition >= 2
         emergencyExit := true
         emergencyReason := "Max Loss $" + str.tostring(currentMaxLoss, "#")
-        if enableTradersPostAlerts and not maxLossAlertFired
+        if enableTradersPostAlerts and not maxLossAlertFired and not anyExitAlertSent and alertSentForCurrentPosition
             exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "max_loss_exceeded"}'
             alert(exitMessage, alert.freq_once_per_bar)
             maxLossAlertFired := true
@@ -887,7 +930,7 @@ if not alertOnlyMode and strategy.position_size != 0 and not na(entryPrice) and 
     if not emergencyExit and peakProfit > maeThreshold and currentProfitDollars < (peakProfit * maeDrawbackPercent) and barsInPosition >= 3
         emergencyExit := true
         emergencyReason := "MAE Protection"
-        if enableTradersPostAlerts and not maeExitAlertFired
+        if enableTradersPostAlerts and not maeExitAlertFired and not anyExitAlertSent and alertSentForCurrentPosition
             exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "mae_protection"}'
             alert(exitMessage, alert.freq_once_per_bar)
             maeExitAlertFired := true
@@ -896,7 +939,7 @@ if not alertOnlyMode and strategy.position_size != 0 and not na(entryPrice) and 
     if not emergencyExit and endOfDayExit
         emergencyExit := true
         emergencyReason := "End of Day"
-        if enableTradersPostAlerts and not eodAlertFired
+        if enableTradersPostAlerts and not eodAlertFired and not anyExitAlertSent and alertSentForCurrentPosition
             exitMessage = '{"ticker": "' + getAlertTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "end_of_day"}'
             alert(exitMessage, alert.freq_once_per_bar)
             eodAlertFired := true
