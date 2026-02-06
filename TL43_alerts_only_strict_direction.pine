@@ -1,0 +1,338 @@
+//@version=5
+strategy("TL43 Alerts-Only (Strict Direction) - Live Safe", overlay=true, initial_capital=25000, pyramiding=0, calc_on_every_tick=true, process_orders_on_close=false)
+
+// ============================================================
+// TL43: Alerts-only safe live deployment template
+// Key fix vs typical "alertOnlyMode": maintains a SHADOW position
+// state so the script does not spam opposite signals while live.
+// ============================================================
+
+// -------------------------
+// Mode / execution controls
+// -------------------------
+group_mode = "Mode"
+alertOnlyMode = input.bool(true, "ALERTS ONLY (live)", group=group_mode, tooltip="When ON, no strategy orders are placed. The script uses a shadow position to avoid firing opposite entries while live.")
+barCloseConfirm = input.bool(true, "Confirm on bar close (recommended)", group=group_mode, tooltip="When ON, signals only fire on confirmed bars (reduces intrabar whipsaws / false flips).")
+
+// -------------------------
+// Symbol / sizing
+// -------------------------
+group_risk = "Risk / Brackets"
+fixedQty = input.int(1, "Contracts (fixed)", minval=1, maxval=50, group=group_risk)
+useLimitEntry = input.bool(true, "Use LIMIT entries (slippage control)", group=group_risk)
+limitSlippageTicks = input.int(6, "Allowed slippage (ticks) for limit", minval=0, maxval=200, group=group_risk, tooltip="Buy limit = signalPrice + ticks*mintage; Sell limit = signalPrice - ticks*mintage. Set 0 for strict at-price.")
+stopSlippageTicks = input.int(4, "Extra stop buffer (ticks)", minval=0, maxval=200, group=group_risk)
+tpSlippageTicks = input.int(0, "Extra TP buffer (ticks)", minval=0, maxval=200, group=group_risk)
+
+useATRBrackets = input.bool(true, "Use ATR-based SL/TP (else fixed points)", group=group_risk)
+atrLen = input.int(10, "ATR Length", minval=2, maxval=100, group=group_risk)
+slATR = input.float(2.0, "SL = ATR ×", minval=0.5, maxval=10, step=0.1, group=group_risk)
+tpATR = input.float(1.4, "TP = ATR ×", minval=0.3, maxval=10, step=0.1, group=group_risk)
+fixedSLPoints = input.float(40.0, "Fixed SL (points / price units)", minval=0.0, group=group_risk)
+fixedTPPoints = input.float(40.0, "Fixed TP (points / price units)", minval=0.0, group=group_risk)
+
+// -------------------------
+// Breakeven + trailing workflow
+// -------------------------
+group_trail = "Breakeven + Trailing"
+enableBreakeven = input.bool(true, "Move SL to breakeven after profit", group=group_trail)
+breakevenTriggerATR = input.float(1.0, "Breakeven trigger (ATR)", minval=0.2, maxval=5, step=0.1, group=group_trail)
+breakevenPlusTicks = input.int(2, "Breakeven + ticks", minval=0, maxval=50, group=group_trail)
+enableTrailAfterBE = input.bool(true, "Trail AFTER breakeven", group=group_trail, tooltip="In alerts-only mode, this can optionally send stop update alerts (see Webhook group).")
+trailATR = input.float(1.2, "Trailing distance (ATR)", minval=0.2, maxval=5, step=0.1, group=group_trail)
+
+// -------------------------
+// Market regime filters (trend, chop, momentum)
+// -------------------------
+group_filters = "Filters (quality)"
+requireStrictCandle = input.bool(true, "STRICT candle direction (Long=green, Short=red)", group=group_filters)
+requireBodyStrength = input.bool(false, "Require body strength (avoid dojis)", group=group_filters)
+minBodyPctATR = input.float(0.10, "Min body % of ATR", minval=0.0, maxval=1.0, step=0.01, group=group_filters)
+
+useChopFilter = input.bool(true, "Chop filter (ADX/ATR/BB width)", group=group_filters)
+adxLen = input.int(14, "ADX length", minval=5, maxval=50, group=group_filters)
+adxMin = input.float(20.0, "Min ADX (below=chop)", minval=5, maxval=40, group=group_filters)
+atrChopMult = input.float(0.75, "ATR < avg*mult => chop", minval=0.3, maxval=1.2, step=0.05, group=group_filters)
+bbWidthMin = input.float(0.015, "Min BB width (below=tight)", minval=0.001, maxval=0.1, step=0.001, group=group_filters)
+
+useMomentum = input.bool(true, "Momentum filter (RSI)", group=group_filters)
+rsiLen = input.int(6, "RSI length", minval=2, maxval=50, group=group_filters)
+rsiLongMin = input.float(42, "RSI long min", minval=10, maxval=80, group=group_filters)
+rsiShortMax = input.float(58, "RSI short max", minval=20, maxval=90, group=group_filters)
+
+// -------------------------
+// Impulse breakout exception (still respects direction)
+// -------------------------
+group_impulse = "Impulse override"
+enableImpulse = input.bool(true, "Enable impulse override", group=group_impulse)
+impulseBodyATR = input.float(1.1, "Body >= ATR ×", minval=0.3, maxval=5, step=0.05, group=group_impulse)
+impulseVolMult = input.float(1.8, "Volume >= volMA ×", minval=1.0, maxval=10, step=0.1, group=group_impulse)
+volMALen = input.int(50, "Volume MA length", minval=5, maxval=200, group=group_impulse)
+
+// -------------------------
+// Optional MTF alignment (trend confirmation)
+// -------------------------
+group_mtf = "MTF alignment"
+enableMTF = input.bool(false, "Enable MTF filter", group=group_mtf)
+mtfTF1 = input.timeframe("15", "TF1", group=group_mtf)
+mtfTF2 = input.timeframe("60", "TF2", group=group_mtf)
+mtfTF3 = input.timeframe("240", "TF3", group=group_mtf)
+mtfNeedPct = input.int(66, "Need alignment %", minval=0, maxval=100, group=group_mtf)
+
+mtfTrend(tf) =>
+    tfClose = request.security(syminfo.tickerid, tf, close, lookahead=barmerge.lookahead_off)
+    tfHma = request.security(syminfo.tickerid, tf, ta.hma(close, 16), lookahead=barmerge.lookahead_off)
+    tfClose > tfHma ? 1 : tfClose < tfHma ? -1 : 0
+
+mtfAlignPct() =>
+    if not enableMTF
+        100
+    else
+        a1 = mtfTrend(mtfTF1)
+        a2 = mtfTrend(mtfTF2)
+        a3 = mtfTrend(mtfTF3)
+        align = (a1 == a2 ? 1 : 0) + (a1 == a3 ? 1 : 0) + (a2 == a3 ? 1 : 0)
+        align * 33
+
+mtfPct = mtfAlignPct()
+
+// -------------------------
+// Webhook / alert payload
+// -------------------------
+group_webhook = "Webhook (TradersPost)"
+enableAlerts = input.bool(true, "Enable alert() webhooks", group=group_webhook)
+webhookTicker = input.string("{{ticker}}", "ticker (default {{ticker}})", group=group_webhook)
+strategyTag = input.string("TL43_STRICT_DIRECTION", "strategy tag", group=group_webhook)
+sendDollarStops = input.bool(true, "Send stop_loss_amount / take_profit_amount ($)", group=group_webhook)
+sendLimitFields = input.bool(true, "Send order_type + limit_price", group=group_webhook)
+
+// Stop update alerts (for trailing after breakeven)
+enableStopUpdateAlerts = input.bool(false, "Send STOP UPDATE alerts (advanced)", group=group_webhook, tooltip="Only enable if your TradersPost bot is configured to interpret update actions.")
+updateAction = input.string("update", "Update action field value", group=group_webhook)
+
+priceDiffToDollars(p1, p2) =>
+    math.abs(p1 - p2) * syminfo.pointvalue
+
+// -------------------------
+// Derived series
+// -------------------------
+atr = ta.atr(atrLen)
+mint = syminfo.mintick
+
+candleBull = close > open
+candleBear = close < open
+body = math.abs(close - open)
+bodyStrong = not requireBodyStrength or (atr > 0 and body >= atr * minBodyPctATR)
+
+volMA = ta.sma(volume, volMALen)
+volSurge = volMA > 0 and volume >= volMA * impulseVolMult
+impulseMove = atr > 0 and body >= atr * impulseBodyATR
+impulseLong = enableImpulse and candleBull and impulseMove and volSurge
+impulseShort = enableImpulse and candleBear and impulseMove and volSurge
+
+// Trend baseline: Supertrend direction
+[st, stDir] = ta.supertrend(2.0, 10) // stDir: 1 up, -1 down
+trendUp = stDir == 1
+trendDn = stDir == -1
+
+// Momentum
+rsi = ta.rsi(close, rsiLen)
+momLongOK = not useMomentum or (rsi >= rsiLongMin and rsi < 72)
+momShortOK = not useMomentum or (rsi <= rsiShortMax and rsi > 28)
+
+// Chop filter
+adxV = ta.adx(adxLen)
+atrAvg = ta.sma(atr, 20)
+bbBasis = ta.sma(close, 20)
+bbDev = ta.stdev(close, 20)
+bbUpper = bbBasis + bbDev * 2
+bbLower = bbBasis - bbDev * 2
+bbWidth = bbBasis != 0 ? (bbUpper - bbLower) / bbBasis : 0.0
+
+isChop = useChopFilter and ((adxV < adxMin ? 1 : 0) + (atr < atrAvg * atrChopMult ? 1 : 0) + (bbWidth < bbWidthMin ? 1 : 0) >= 2)
+
+// Strict candle direction enforcement
+longBarOK = bodyStrong and (not requireStrictCandle or candleBull)
+shortBarOK = bodyStrong and (not requireStrictCandle or candleBear)
+
+mtfLongOK = not enableMTF or mtfPct >= mtfNeedPct
+mtfShortOK = not enableMTF or mtfPct >= mtfNeedPct
+
+// -------------------------
+// Shadow position (critical for alerts-only live)
+// -------------------------
+var int shadowPos = 0        // 1 long, -1 short, 0 flat
+var float shadowEntry = na
+var float shadowSL = na
+var float shadowTP = na
+var int shadowEntryBar = na
+var bool beArmed = false
+
+inPos = alertOnlyMode ? shadowPos != 0 : strategy.position_size != 0
+isLongPos = alertOnlyMode ? shadowPos == 1 : strategy.position_size > 0
+isShortPos = alertOnlyMode ? shadowPos == -1 : strategy.position_size < 0
+
+// Auto-clear shadow position when bracket levels are crossed (keeps state in sync when broker exits)
+if alertOnlyMode and inPos and not na(shadowSL) and not na(shadowTP)
+    if isLongPos and (low <= shadowSL or high >= shadowTP)
+        shadowPos := 0
+        shadowEntry := na
+        shadowSL := na
+        shadowTP := na
+        shadowEntryBar := na
+        beArmed := false
+    if isShortPos and (high >= shadowSL or low <= shadowTP)
+        shadowPos := 0
+        shadowEntry := na
+        shadowSL := na
+        shadowTP := na
+        shadowEntryBar := na
+        beArmed := false
+
+// -------------------------
+// Entry logic (quality first)
+// -------------------------
+canSignalNow = not barCloseConfirm or barstate.isconfirmed
+
+baseLongSignal = canSignalNow and longBarOK and trendUp and momLongOK and not isChop and mtfLongOK
+baseShortSignal = canSignalNow and shortBarOK and trendDn and momShortOK and not isChop and mtfShortOK
+
+// Impulse entries are allowed even if chop filter blocks, but still require direction + mtf + bodyStrong
+impulseLongSignal = canSignalNow and impulseLong and longBarOK and mtfLongOK
+impulseShortSignal = canSignalNow and impulseShort and shortBarOK and mtfShortOK
+
+longSignal = (baseLongSignal or impulseLongSignal)
+shortSignal = (baseShortSignal or impulseShortSignal)
+
+enterLong = longSignal and not inPos
+enterShort = shortSignal and not inPos
+
+// -------------------------
+// Bracket calculations (prices + $)
+// -------------------------
+slipLimit = limitSlippageTicks * mint
+slipStop = stopSlippageTicks * mint
+slipTP = tpSlippageTicks * mint
+
+slDist = useATRBrackets ? atr * slATR : fixedSLPoints
+tpDist = useATRBrackets ? atr * tpATR : fixedTPPoints
+
+calcLongBracket(sigPrice) =>
+    entryRef = sigPrice
+    // SL below (widen by slipStop), TP above (optionally adjusted)
+    sl = entryRef - slDist - slipStop
+    tp = entryRef + tpDist + slipTP
+    [sl, tp]
+
+calcShortBracket(sigPrice) =>
+    entryRef = sigPrice
+    sl = entryRef + slDist + slipStop
+    tp = entryRef - tpDist - slipTP
+    [sl, tp]
+
+// -------------------------
+// Alert helpers (numeric JSON)
+// -------------------------
+makeEntryJson(_action, _qty, _sigPrice, _limitPrice, _sl, _tp, _signalType) =>
+    // IMPORTANT: numeric fields are NOT quoted (TradersPost parsers can fail on quoted numbers).
+    s = '{"ticker":"' + webhookTicker + '","action":"' + _action + '"'
+    s += ',"quantity":' + str.tostring(_qty)
+    s += ',"price":' + str.tostring(_sigPrice, format.mintick)
+    s += ',"stop_loss":' + str.tostring(_sl, format.mintick)
+    s += ',"take_profit":' + str.tostring(_tp, format.mintick)
+    if sendLimitFields
+        s += ',"order_type":"' + (useLimitEntry ? "limit" : "market") + '"'
+        if useLimitEntry
+            s += ',"limit_price":' + str.tostring(_limitPrice, format.mintick)
+    if sendDollarStops
+        s += ',"stop_loss_amount":' + str.tostring(priceDiffToDollars(_sigPrice, _sl), "#.##")
+        s += ',"take_profit_amount":' + str.tostring(priceDiffToDollars(_tp, _sigPrice), "#.##")
+    s += ',"strategy":"' + strategyTag + '"'
+    s += ',"timeframe":"' + timeframe.period + '"'
+    s += ',"signal_type":"' + _signalType + '"'
+    s += ',"mtf_alignment_pct":' + str.tostring(mtfPct)
+    s += ',"strict_candle":' + (requireStrictCandle ? "true" : "false")
+    s += ',"chop":' + (isChop ? "true" : "false")
+    s += '}'
+    s
+
+makeStopUpdateJson(_newSL) =>
+    s = '{"ticker":"' + webhookTicker + '","action":"' + updateAction + '"'
+    s += ',"stop_loss":' + str.tostring(_newSL, format.mintick)
+    s += ',"strategy":"' + strategyTag + '"'
+    s += ',"timeframe":"' + timeframe.period + '"'
+    s += '}'
+    s
+
+// -------------------------
+// Execute entries (alerts + optional backtest orders)
+// -------------------------
+if enableAlerts and enterLong
+    sigPrice = close
+    [sl, tp] = calcLongBracket(sigPrice)
+    limitPrice = useLimitEntry ? (sigPrice + slipLimit) : sigPrice
+    if alertOnlyMode
+        shadowPos := 1
+        shadowEntry := sigPrice
+        shadowSL := sl
+        shadowTP := tp
+        shadowEntryBar := bar_index
+        beArmed := false
+    else
+        strategy.entry("LONG", strategy.long, qty=fixedQty)
+    alert(makeEntryJson("buy", fixedQty, sigPrice, limitPrice, sl, tp, impulseLongSignal ? "IMPULSE" : "STANDARD"), alert.freq_once_per_bar)
+
+if enableAlerts and enterShort
+    sigPrice = close
+    [sl, tp] = calcShortBracket(sigPrice)
+    limitPrice = useLimitEntry ? (sigPrice - slipLimit) : sigPrice
+    if alertOnlyMode
+        shadowPos := -1
+        shadowEntry := sigPrice
+        shadowSL := sl
+        shadowTP := tp
+        shadowEntryBar := bar_index
+        beArmed := false
+    else
+        strategy.entry("SHORT", strategy.short, qty=fixedQty)
+    alert(makeEntryJson("sell", fixedQty, sigPrice, limitPrice, sl, tp, impulseShortSignal ? "IMPULSE" : "STANDARD"), alert.freq_once_per_bar)
+
+// -------------------------
+// Breakeven then trailing stop (shadow + optional stop-update alert)
+// -------------------------
+if inPos and not na(shadowEntry)
+    profit = isLongPos ? (close - shadowEntry) : (shadowEntry - close)
+    beTrigger = atr * breakevenTriggerATR
+    beLevel = isLongPos ? (shadowEntry + breakevenPlusTicks * mint) : (shadowEntry - breakevenPlusTicks * mint)
+
+    // Arm breakeven
+    if enableBreakeven and not beArmed and profit >= beTrigger
+        newSL = isLongPos ? math.max(shadowSL, beLevel) : math.min(shadowSL, beLevel)
+        if alertOnlyMode
+            shadowSL := newSL
+            beArmed := true
+        if enableStopUpdateAlerts and enableAlerts
+            alert(makeStopUpdateJson(newSL), alert.freq_once_per_bar)
+
+    // Trail after BE
+    if enableTrailAfterBE and beArmed
+        trailDist = atr * trailATR
+        trailedSL = isLongPos ? (close - trailDist) : (close + trailDist)
+        newSL2 = isLongPos ? math.max(shadowSL, trailedSL) : math.min(shadowSL, trailedSL)
+        if newSL2 != shadowSL
+            if alertOnlyMode
+                shadowSL := newSL2
+            if enableStopUpdateAlerts and enableAlerts
+                alert(makeStopUpdateJson(newSL2), alert.freq_once_per_bar)
+
+// -------------------------
+// Visuals
+// -------------------------
+plot(st, color=trendUp ? color.new(color.lime, 0) : color.new(color.red, 0), linewidth=2, title="SuperTrend")
+bgcolor(isChop ? color.new(color.red, 92) : na, title="Chop filter")
+plotshape(enterLong, title="Long Entry Signal", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), text="LONG", size=size.tiny)
+plotshape(enterShort, title="Short Entry Signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), text="SHORT", size=size.tiny)
+
+// Shadow brackets
+plot(alertOnlyMode and inPos ? shadowSL : na, title="Shadow SL", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(alertOnlyMode and inPos ? shadowTP : na, title="Shadow TP", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
