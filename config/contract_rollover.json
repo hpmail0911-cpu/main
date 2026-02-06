@@ -1,0 +1,156 @@
+{
+  "_description": "Futures contract rollover configuration for micro futures instruments",
+  "_updated": "2026-02-06",
+  "_notes": [
+    "Contract months use CME standard codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec",
+    "Each instrument has specific tradeable months (not all months are available)",
+    "rollover_days_before_expiry: how many days before expiry to roll to next contract",
+    "The 'active_contract' field should be updated when contracts roll over",
+    "Continuous contracts (e.g., MGC1!) must be mapped to the correct active month"
+  ],
+  "month_codes": {
+    "F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
+    "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12
+  },
+  "instruments": {
+    "MGC": {
+      "name": "Micro Gold Futures",
+      "exchange": "COMEX",
+      "point_value": 10.0,
+      "tick_size": 0.1,
+      "continuous_ticker": "MGC1!",
+      "tradeable_months": ["G", "J", "M", "Q", "V", "Z"],
+      "rollover_days_before_expiry": 30,
+      "_rollover_note": "Topstep/prop firms stop new positions well before first notice day. Gold rolls ~30 days before exchange expiry. MGCG2026 became inactive by late January 2026.",
+      "active_contract": "MGCJ2026",
+      "active_month_code": "J",
+      "active_year": 2026,
+      "previous_contract": "MGCG2026",
+      "next_contract": "MGCM2026",
+      "first_notice_dates_2026": {
+        "MGCG2026": "2026-01-30",
+        "MGCJ2026": "2026-03-31",
+        "MGCM2026": "2026-05-29",
+        "MGCQ2026": "2026-07-31",
+        "MGCV2026": "2026-09-30",
+        "MGCZ2026": "2026-11-30"
+      },
+      "expiry_schedule_2026": {
+        "MGCG2026": "2026-02-25",
+        "MGCJ2026": "2026-04-28",
+        "MGCM2026": "2026-06-26",
+        "MGCQ2026": "2026-08-27",
+        "MGCV2026": "2026-10-28",
+        "MGCZ2026": "2026-12-29"
+      }
+    },
+    "MES": {
+      "name": "Micro E-mini S&P 500",
+      "exchange": "CME",
+      "point_value": 5.0,
+      "tick_size": 0.25,
+      "continuous_ticker": "MES1!",
+      "tradeable_months": ["H", "M", "U", "Z"],
+      "rollover_days_before_expiry": 5,
+      "active_contract": "MESH2026",
+      "active_month_code": "H",
+      "active_year": 2026,
+      "previous_contract": "MESZ2025",
+      "next_contract": "MESM2026",
+      "expiry_schedule_2026": {
+        "MESH2026": "2026-03-20",
+        "MESM2026": "2026-06-19",
+        "MESU2026": "2026-09-18",
+        "MESZ2026": "2026-12-18"
+      }
+    },
+    "MNQ": {
+      "name": "Micro E-mini Nasdaq-100",
+      "exchange": "CME",
+      "point_value": 2.0,
+      "tick_size": 0.25,
+      "continuous_ticker": "MNQ1!",
+      "tradeable_months": ["H", "M", "U", "Z"],
+      "rollover_days_before_expiry": 5,
+      "active_contract": "MNQH2026",
+      "active_month_code": "H",
+      "active_year": 2026,
+      "previous_contract": "MNQZ2025",
+      "next_contract": "MNQM2026",
+      "expiry_schedule_2026": {
+        "MNQH2026": "2026-03-20",
+        "MNQM2026": "2026-06-19",
+        "MNQU2026": "2026-09-18",
+        "MNQZ2026": "2026-12-18"
+      }
+    },
+    "MYM": {
+      "name": "Micro E-mini Dow Jones",
+      "exchange": "CBOT",
+      "point_value": 0.5,
+      "tick_size": 1.0,
+      "continuous_ticker": "MYM1!",
+      "tradeable_months": ["H", "M", "U", "Z"],
+      "rollover_days_before_expiry": 5,
+      "active_contract": "MYMH2026",
+      "active_month_code": "H",
+      "active_year": 2026,
+      "previous_contract": "MYMZ2025",
+      "next_contract": "MYMM2026",
+      "expiry_schedule_2026": {
+        "MYMH2026": "2026-03-20",
+        "MYMM2026": "2026-06-19",
+        "MYMU2026": "2026-09-18",
+        "MYMZ2026": "2026-12-18"
+      }
+    },
+    "MCL": {
+      "name": "Micro WTI Crude Oil",
+      "exchange": "NYMEX",
+      "point_value": 10.0,
+      "tick_size": 0.01,
+      "continuous_ticker": "MCL1!",
+      "tradeable_months": ["F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z"],
+      "rollover_days_before_expiry": 10,
+      "_rollover_note": "Crude oil rolls ~10 days before expiry for prop firms",
+      "active_contract": "MCLH2026",
+      "active_month_code": "H",
+      "active_year": 2026,
+      "previous_contract": "MCLG2026",
+      "next_contract": "MCLJ2026",
+      "expiry_schedule_2026": {
+        "MCLG2026": "2026-01-20",
+        "MCLH2026": "2026-02-20",
+        "MCLJ2026": "2026-03-20",
+        "MCLK2026": "2026-04-21",
+        "MCLM2026": "2026-05-19",
+        "MCLN2026": "2026-06-22",
+        "MCLQ2026": "2026-07-21",
+        "MCLU2026": "2026-08-20",
+        "MCLV2026": "2026-09-22",
+        "MCLX2026": "2026-10-20",
+        "MCLZ2026": "2026-11-20"
+      }
+    },
+    "M2K": {
+      "name": "Micro E-mini Russell 2000",
+      "exchange": "CME",
+      "point_value": 5.0,
+      "tick_size": 0.1,
+      "continuous_ticker": "M2K1!",
+      "tradeable_months": ["H", "M", "U", "Z"],
+      "rollover_days_before_expiry": 5,
+      "active_contract": "M2KH2026",
+      "active_month_code": "H",
+      "active_year": 2026,
+      "previous_contract": "M2KZ2025",
+      "next_contract": "M2KM2026",
+      "expiry_schedule_2026": {
+        "M2KH2026": "2026-03-20",
+        "M2KM2026": "2026-06-19",
+        "M2KU2026": "2026-09-18",
+        "M2KZ2026": "2026-12-18"
+      }
+    }
+  }
+}
