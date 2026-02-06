@@ -1,0 +1,94 @@
+//@version=5
+// Topstep "ContractNotActive" mitigation for futures alerts.
+// Paste the functions below into your strategy and replace your getInstrumentTicker().
+//
+// Why: On Feb 6, 2026 Topstep rejected MGCG2026 (Feb) as not tradable/active.
+// This helper rolls MGC/GC off the delivery month and optionally rolls early
+// near the end of the month before a delivery month.
+//
+// Note: This is a helper snippet (not a standalone strategy).
+
+// Returns the standard futures month code for 1..12.
+f_monthCode(int m) =>
+    m == 1  ? "F" :
+    m == 2  ? "G" :
+    m == 3  ? "H" :
+    m == 4  ? "J" :
+    m == 5  ? "K" :
+    m == 6  ? "M" :
+    m == 7  ? "N" :
+    m == 8  ? "Q" :
+    m == 9  ? "U" :
+    m == 10 ? "V" :
+    m == 11 ? "X" :
+    m == 12 ? "Z" : ""
+
+f_isLeapYear(int y) =>
+    (y % 4 == 0) and ((y % 100 != 0) or (y % 400 == 0))
+
+f_daysInMonth(int y, int m) =>
+    m == 1  ? 31 :
+    m == 2  ? (f_isLeapYear(y) ? 29 : 28) :
+    m == 3  ? 31 :
+    m == 4  ? 30 :
+    m == 5  ? 31 :
+    m == 6  ? 30 :
+    m == 7  ? 31 :
+    m == 8  ? 31 :
+    m == 9  ? 30 :
+    m == 10 ? 31 :
+    m == 11 ? 30 :
+    m == 12 ? 31 : 30
+
+// Find the next contract month in a sorted list of months (e.g., [2,4,6,8,10,12]).
+// If none are >= current month, wraps to the first month in the list (next year).
+f_nextMonthFromList(int curMonth, int[] months) =>
+    int nextM = array.get(months, 0)
+    bool found = false
+    for i = 0 to array.size(months) - 1
+        int candidate = array.get(months, i)
+        if (not found) and (candidate >= curMonth)
+            nextM := candidate
+            found := true
+    nextM
+
+// Find the month AFTER the given month within the list (wraps around).
+f_followingMonthFromList(int monthInList, int[] months) =>
+    int following = array.get(months, 0)
+    for i = 0 to array.size(months) - 1
+        int candidate = array.get(months, i)
+        if candidate == monthInList
+            int nextIdx = (i + 1) % array.size(months)
+            following := array.get(months, nextIdx)
+    following
+
+// Compute the active contract for MGC/GC style (even months) with a conservative roll.
+// - Rolls OFF the delivery month immediately (e.g., any date in Feb -> Apr).
+// - Optionally rolls EARLY in the month before delivery month (e.g., late Jan -> Apr).
+f_activeGoldMonth(int y, int m, int d, int rollDaysBeforeMonthEnd) =>
+    // Gold months: Feb, Apr, Jun, Aug, Oct, Dec
+    var int[] goldMonths = array.from(2, 4, 6, 8, 10, 12)
+
+    bool isDeliveryMonth =
+         m == 2 or m == 4 or m == 6 or m == 8 or m == 10 or m == 12
+
+    if isDeliveryMonth
+        // Conservative: Topstep often blocks new positions in the delivery month.
+        f_followingMonthFromList(m, goldMonths)
+    else
+        int nextDelivery = f_nextMonthFromList(m, goldMonths)
+
+        // Early roll logic: if we are in the month BEFORE nextDelivery and near month-end,
+        // skip to the following delivery month to avoid FND/contract activation cutoffs.
+        int daysInCurMonth = f_daysInMonth(y, m)
+        bool nearMonthEnd = rollDaysBeforeMonthEnd > 0 and d >= (daysInCurMonth - rollDaysBeforeMonthEnd)
+
+        int monthBeforeNext = nextDelivery == 2 ? 1 : (nextDelivery - 1)
+        bool inMonthBeforeDelivery = m == monthBeforeNext
+
+        (inMonthBeforeDelivery and nearMonthEnd) ? f_followingMonthFromList(nextDelivery, goldMonths) : nextDelivery
+
+// Build a Topstep-style contract ticker, e.g. "MGCJ2026" or "MGCV2026".
+f_topstepContract(string root, int contractMonth, int contractYear) =>
+    root + f_monthCode(contractMonth) + str.tostring(contractYear)
+
