@@ -252,7 +252,7 @@ maxPositionSize = input.float(12.0, "Max Position Size (% of Equity)", minval=5.
 // === TRADERSPOST ALERT SETTINGS ===
 enableTradersPostAlerts = input.bool(true, "Enable TradersPost Alerts")
 tradersPostSymbol = input.string("{{ticker}}", "TradersPost Symbol")
-alertOnlyMode = input.bool(true, "Alert Only Mode (No Strategy Execution)")
+alertOnlyMode = input.bool(true, "Alert Only Mode (No Live Strategy Orders)")
 
 // === EXECUTION & SLIPPAGE ===
 executionGroup = "Execution & Slippage"
@@ -262,7 +262,7 @@ entryStopLimitOffsetTicks = input.int(6, "Entry Stop-Limit Offset (ticks)", minv
 slippageTicks = input.int(2, "Slippage Buffer (ticks)", minval=0, group=executionGroup)
 trailAfterBreakevenOnly = input.bool(true, "Trail After Breakeven Only", group=executionGroup)
 
-enableStrategyOrders = not alertOnlyMode
+enableStrategyOrders = not alertOnlyMode or not barstate.isrealtime
 
 // === V8 SAFETY & TRADOVATE DOLLAR STOPS ===
 require5Star = input.bool(false, "V8: Require 5-Star Entry Gate", group="V8 Safety")
