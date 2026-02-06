@@ -1,0 +1,1065 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=5
+strategy("TL43 V.18 PRODUCTION - FIXED SL/SLIPPAGE/ALERTS", overlay=true,
+     initial_capital=25000,
+     default_qty_type=strategy.fixed,
+     default_qty_value=1,
+     pyramiding=0,
+     calc_on_order_fills=true,
+     calc_on_every_tick=true,
+     process_orders_on_close=false,
+     backtest_fill_limits_assumption=0,
+     margin_long=100,
+     margin_short=100)
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║                    BUG FIXES FROM V.17 → V.18                              ║
+// ║                                                                            ║
+// ║  FIX #1:  REMOVED DUPLICATE ENTRY (was creating 2 positions per signal)    ║
+// ║  FIX #2:  UNIFIED SL/TP (alerts and strategy.exit now use SAME values)     ║
+// ║  FIX #3:  ADDED SLIPPAGE BUFFER to all stops (configurable per instrument) ║
+// ║  FIX #4:  TRAILING STOP after breakeven + slippage recovery                ║
+// ║  FIX #5:  barsInPosition now counts BARS not TICKS (was overcounting)      ║
+// ║  FIX #6:  emergencyBarsInPos now counts BARS not TICKS                     ║
+// ║  FIX #7:  strategy.exit uses from_entry (was applying to wrong entry)      ║
+// ║  FIX #8:  pyramiding=0 prevents double positions                           ║
+// ║  FIX #9:  PROPER TradersPost bracket order JSON format                     ║
+// ║  FIX #10: REMOVED competing exit layers (consolidated into one system)     ║
+// ║  FIX #11: LOSS COOLDOWN prevents revenge trading after stops               ║
+// ║  FIX #12: CHOPPY FILTER strengthened (ADX threshold raised)                ║
+// ║  FIX #13: Removed MICRO/INSTANT signals (too low quality for live)         ║
+// ║  FIX #14: calc_on_order_fills=true ensures fills are processed             ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 1: CORE SETTINGS & HIGH WIN RATE MODE
+// ═══════════════════════════════════════════════════════════════════════════════
+highWinRateMode      = input.bool(true, "High Win Rate Mode (70%+)")
+quickTPMultiplier    = input.float(0.6, "Quick TP Multiplier", minval=0.3, maxval=1.0)
+widerSLMultiplier    = input.float(1.5, "Wider SL Multiplier", minval=1.0, maxval=2.5)
+minRSIForEntry       = input.float(40, "Min RSI for Long Entry", minval=30, maxval=50)
+maxRSIForEntry       = input.float(60, "Max RSI for Short Entry", minval=50, maxval=70)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 2: ENTRY CONFIRMATION (STRICT CANDLE DIRECTION)
+// ═══════════════════════════════════════════════════════════════════════════════
+group_entryConfirm   = "Entry Confirmation"
+requireCandleDirection = input.bool(true, "STRICT: Long=Green ONLY, Short=Red ONLY", group=group_entryConfirm)
+requireBodyStrength  = input.bool(true, "Require Body Strength (avoid tiny dojis)", group=group_entryConfirm)
+minBodyPctOfATR      = input.float(0.15, "Min Body % of ATR", minval=0.0, maxval=1.0, step=0.01, group=group_entryConfirm)
+enableImpulseOverride = input.bool(true, "Enable Impulse Override (big candle direction)", group=group_entryConfirm)
+impulseATRMult       = input.float(1.10, "Impulse Move ATR Multiple", minval=0.3, maxval=5.0, step=0.05, group=group_entryConfirm)
+impulseVolMult       = input.float(1.80, "Impulse Volume Multiple", minval=1.0, maxval=10.0, step=0.05, group=group_entryConfirm)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 3: SLIPPAGE PROTECTION (NEW IN V.18)
+// ═══════════════════════════════════════════════════════════════════════════════
+slippageGroup        = "Slippage Protection"
+enableSlippageBuffer = input.bool(true, "Enable Slippage Buffer on SL/TP", group=slippageGroup, tooltip="Widens stop loss by slippage amount so stops aren't too tight after fill slippage")
+slippageTicks_MES    = input.int(4, "MES Slippage Buffer (ticks)", minval=0, maxval=20, group=slippageGroup)
+slippageTicks_MNQ    = input.int(4, "MNQ Slippage Buffer (ticks)", minval=0, maxval=20, group=slippageGroup)
+slippageTicks_MYM    = input.int(4, "MYM Slippage Buffer (ticks)", minval=0, maxval=20, group=slippageGroup)
+slippageTicks_MCL    = input.int(4, "MCL Slippage Buffer (ticks)", minval=0, maxval=20, group=slippageGroup)
+slippageTicks_MGC    = input.int(4, "MGC Slippage Buffer (ticks)", minval=0, maxval=20, group=slippageGroup)
+slippageTicks_M2K    = input.int(4, "M2K Slippage Buffer (ticks)", minval=0, maxval=20, group=slippageGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 4: LOSS COOLDOWN (NEW IN V.18)
+// ═══════════════════════════════════════════════════════════════════════════════
+cooldownGroup        = "Loss Cooldown"
+enableLossCooldown   = input.bool(true, "Enable Cooldown After Loss", group=cooldownGroup, tooltip="Wait N bars after a losing trade before entering again")
+cooldownBars         = input.int(5, "Cooldown Bars After Loss", minval=1, maxval=30, group=cooldownGroup)
+cooldownAfterConsecutiveLosses = input.int(2, "Extra Cooldown After N Consecutive Losses", minval=1, maxval=5, group=cooldownGroup)
+extraCooldownBars    = input.int(15, "Extra Cooldown Duration (bars)", minval=5, maxval=50, group=cooldownGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 5: CONFLUENCE & TREND OVERRIDE
+// ═══════════════════════════════════════════════════════════════════════════════
+confluenceLevel      = input.int(10, "Confluence Level (1=Loose, 15=Strict)", minval=1, maxval=15)
+enableTrendOverride  = input.bool(true, "Enable Strong Trend Override", group="Trend Override")
+consecutiveCandlesRequired = input.int(3, "Consecutive Candles for Override", minval=2, maxval=5, group="Trend Override")
+trendOverrideVolMultiplier = input.float(0.8, "Volume Multiplier for Override", minval=0.5, maxval=1.5, group="Trend Override")
+trendOverrideRangeMultiplier = input.float(1.5, "Range Multiplier for Override", minval=1.0, maxval=3.0, group="Trend Override")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 6: CHOPPY MARKET FILTER (STRENGTHENED IN V.18)
+// ═══════════════════════════════════════════════════════════════════════════════
+choppyFilterGroup    = "Choppy Market Filter"
+enableChoppyFilter   = input.bool(true, "Enable Choppy/Sideways Market Filter", group=choppyFilterGroup)
+choppyADXThreshold   = input.float(22.0, "ADX Threshold (below = choppy)", minval=10.0, maxval=30.0, group=choppyFilterGroup)
+choppyATRMultiplier  = input.float(0.7, "ATR Multiplier (below avg = choppy)", minval=0.5, maxval=1.0, group=choppyFilterGroup)
+choppyBBWidthThreshold = input.float(0.015, "BB Width Threshold (below = tight range)", minval=0.005, maxval=0.030, group=choppyFilterGroup)
+disableChoppyInTrend = input.bool(true, "Disable Choppy Filter During Strong Trends", group=choppyFilterGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 7: EMERGENCY SAFETY SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+emergencyGroup       = "Emergency Safety System"
+enableBackupSL       = input.bool(true, "Enable Backup Stop Loss (Hard Floor)", group=emergencyGroup)
+backupSL_MES         = input.float(12.0, "MES Backup SL (points)", group=emergencyGroup)
+backupSL_MNQ         = input.float(40.0, "MNQ Backup SL (points)", group=emergencyGroup)
+backupSL_MYM         = input.float(120.0, "MYM Backup SL (points)", group=emergencyGroup)
+backupSL_MCL         = input.float(0.60, "MCL Backup SL (price $)", group=emergencyGroup)
+backupSL_MGC         = input.float(8.0, "MGC Backup SL (price $)", group=emergencyGroup)
+backupSL_Default     = input.float(20.0, "Default Backup SL (points)", group=emergencyGroup)
+enableNuclearExit    = input.bool(true, "Enable Nuclear Emergency Exit", group=emergencyGroup)
+nuclearExtraFactor   = input.float(2.0, "Nuclear Distance Factor (x Backup SL)", minval=1.1, maxval=5.0, group=emergencyGroup)
+nuclearMaxBars       = input.int(80, "Nuclear Max Bars in Position", minval=10, maxval=500, group=emergencyGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 8: SESSION SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+enable24_7Trading    = input.bool(true, "Enable 24/7 Trading", group="Global Sessions")
+enableNoTradeZone    = input.bool(true, "No Trade Zone (0:00-6:00 ET)", group="Global Sessions")
+enableAsianSession   = input.bool(true, "Asian Session (19:00-03:00 ET)", group="Global Sessions")
+enableLondonSession  = input.bool(true, "London Session (03:00-12:00 ET)", group="Global Sessions")
+enableNYSession      = input.bool(true, "NY Session (09:30-16:00 ET)", group="Global Sessions")
+enableUAESession     = input.bool(true, "UAE Session (00:00-08:00 ET)", group="Global Sessions")
+asianBestInstruments = input.string("MNQ,MES,MGC", "Asian Best Instruments", group="Global Sessions")
+londonBestInstruments = input.string("MGC,MCL,MES", "London Best Instruments", group="Global Sessions")
+nyBestInstruments    = input.string("MES,MNQ,MYM", "NY Best Instruments", group="Global Sessions")
+uaeBestInstruments   = input.string("MCL,MGC", "UAE Best Instruments", group="Global Sessions")
+asianMultiplier      = input.float(1.2, "Asian Session Multiplier", minval=0.5, maxval=2.0, group="Global Sessions")
+londonMultiplier     = input.float(1.3, "London Session Multiplier", minval=0.5, maxval=2.0, group="Global Sessions")
+nyMultiplier         = input.float(1.5, "NY Session Multiplier", minval=0.5, maxval=2.0, group="Global Sessions")
+uaeMultiplier        = input.float(0.9, "UAE Session Multiplier", minval=0.5, maxval=2.0, group="Global Sessions")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 9: SIGNAL TOGGLES & DAILY LIMITS
+// ═══════════════════════════════════════════════════════════════════════════════
+enableStrongSignals  = input.bool(true, "Enable STRONG Signals")
+enableScalpSignals   = input.bool(true, "Enable SCALP Signals")
+enableImpulseSignals = input.bool(true, "Enable IMPULSE Signals")
+enableDailyTradeLimit = input.bool(true, "Enable Daily Trade Limit")
+maxDailyTrades       = input.int(15, "Max Daily Trades", minval=3, maxval=100)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 10: INSTRUMENT DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+isMYM = str.contains(syminfo.ticker, "MYM") or str.contains(syminfo.ticker, "YM")
+isMNQ = str.contains(syminfo.ticker, "MNQ") or str.contains(syminfo.ticker, "NQ")
+isMCL = str.contains(syminfo.ticker, "MCL") or str.contains(syminfo.ticker, "CL")
+isMGC = str.contains(syminfo.ticker, "MGC") or str.contains(syminfo.ticker, "GC")
+isMES = str.contains(syminfo.ticker, "MES") or str.contains(syminfo.ticker, "ES")
+isM2K = str.contains(syminfo.ticker, "M2K") or str.contains(syminfo.ticker, "RTY")
+isMicroFutures = isMYM or isMNQ or isMCL or isMGC or isMES or isM2K
+
+instrumentName = isMYM ? "MYM" : isMNQ ? "MNQ" : isMES ? "MES" : isMCL ? "MCL" : isMGC ? "MGC" : isM2K ? "M2K" : "UNK"
+
+getInstrumentTicker() =>
+    isMYM ? "MYM1!" : isMNQ ? "MNQ1!" : isMES ? "MES1!" : isMCL ? "MCL1!" : isMGC ? "MGC1!" : isM2K ? "M2K1!" : syminfo.ticker
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 11: PER-INSTRUMENT SL/TP/QTY SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+perInstGroup = "Per-Instrument Trade Settings"
+mes_useCustom = input.bool(false, "MES: Use Custom SL/TP/Size", group=perInstGroup)
+mes_customSL  = input.float(7.0, "MES: Stop Loss (points)", group=perInstGroup)
+mes_customTP  = input.float(10.0, "MES: Take Profit (points)", group=perInstGroup)
+mes_customQty = input.int(1, "MES: Position Size (contracts)", minval=1, maxval=50, group=perInstGroup)
+mnq_useCustom = input.bool(false, "MNQ: Use Custom SL/TP/Size", group=perInstGroup)
+mnq_customSL  = input.float(25.0, "MNQ: Stop Loss (points)", group=perInstGroup)
+mnq_customTP  = input.float(35.0, "MNQ: Take Profit (points)", group=perInstGroup)
+mnq_customQty = input.int(1, "MNQ: Position Size (contracts)", minval=1, maxval=50, group=perInstGroup)
+mym_useCustom = input.bool(false, "MYM: Use Custom SL/TP/Size", group=perInstGroup)
+mym_customSL  = input.float(60.0, "MYM: Stop Loss (points)", group=perInstGroup)
+mym_customTP  = input.float(90.0, "MYM: Take Profit (points)", group=perInstGroup)
+mym_customQty = input.int(1, "MYM: Position Size (contracts)", minval=1, maxval=50, group=perInstGroup)
+mcl_useCustom = input.bool(false, "MCL: Use Custom SL/TP/Size", group=perInstGroup)
+mcl_customSL  = input.float(0.30, "MCL: Stop Loss (price $)", group=perInstGroup)
+mcl_customTP  = input.float(0.50, "MCL: Take Profit (price $)", group=perInstGroup)
+mcl_customQty = input.int(1, "MCL: Position Size (contracts)", minval=1, maxval=50, group=perInstGroup)
+mgc_useCustom = input.bool(false, "MGC: Use Custom SL/TP/Size", group=perInstGroup)
+mgc_customSL  = input.float(4.0, "MGC: Stop Loss (price $)", group=perInstGroup)
+mgc_customTP  = input.float(7.0, "MGC: Take Profit (price $)", group=perInstGroup)
+mgc_customQty = input.int(1, "MGC: Position Size (contracts)", minval=1, maxval=50, group=perInstGroup)
+m2k_useCustom = input.bool(false, "M2K: Use Custom SL/TP/Size", group=perInstGroup)
+m2k_customSL  = input.float(9.0, "M2K: Stop Loss (points)", group=perInstGroup)
+m2k_customTP  = input.float(14.0, "M2K: Take Profit (points)", group=perInstGroup)
+m2k_customQty = input.int(1, "M2K: Position Size (contracts)", minval=1, maxval=50, group=perInstGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 12: RISK MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+baseRiskPercent  = input.float(0.6, "Base Risk per Trade (%)", minval=0.2, maxval=2.0)
+maxDailyLoss     = input.float(5.0, "Max Daily Loss (%)", minval=2.0, maxval=8.0)
+maxPositionSize  = input.float(12.0, "Max Position Size (% of Equity)", minval=5.0, maxval=25.0)
+useFixedContractSize = input.bool(true, "Use Fixed Contract Size")
+fixedContracts   = input.int(1, "Fixed Contract Size", minval=1, maxval=10)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 13: EXIT & TRAILING STOP SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+exitGroup = "Exit Management"
+useTrailingStop         = input.bool(true, "Enable Trailing Stop After BE + Slippage", group=exitGroup)
+trailActivationATRMult  = input.float(0.5, "Trail Activation (ATR multiple above BE)", minval=0.1, maxval=2.0, group=exitGroup, tooltip="Trailing activates when profit exceeds slippage + this ATR multiple")
+trailDistanceATRMult    = input.float(0.8, "Trail Distance (ATR multiple)", minval=0.3, maxval=2.0, group=exitGroup, tooltip="Trailing stop distance below peak price")
+useSignalReversalExits  = input.bool(true, "Signal Reversal Exits", group=exitGroup)
+useEndOfDayExits        = input.bool(true, "End of Day Exits", group=exitGroup)
+endOfDayTime            = input.int(1550, "End of Day Time (ET)", minval=1500, maxval=1700, group=exitGroup)
+useMaxHoldingExit       = input.bool(true, "Max Holding Time Exit", group=exitGroup)
+baseMaxHolding          = input.int(30, "Max Holding Bars", minval=10, maxval=100, group=exitGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 14: ALERT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+alertGroup = "Alert Settings"
+enableTradersPostAlerts = input.bool(true, "Enable TradersPost Alerts", group=alertGroup)
+alertOnlyMode          = input.bool(false, "Alert Only Mode (No Strategy Execution)", group=alertGroup)
+enableDollarStops      = input.bool(true, "Send Dollar-based SL/TP in webhook", group=alertGroup)
+useManualDollarOverrides = input.bool(false, "Use FIXED Dollar SL/TP Overrides", group=alertGroup)
+manualDollarSL         = input.float(0.0, "Fixed Dollar Stop Loss (0 = auto)", group=alertGroup)
+manualDollarTP         = input.float(0.0, "Fixed Dollar Take Profit (0 = auto)", group=alertGroup)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 15: INDICATOR SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+hullSrc        = input.source(close, "Hull Source")
+baseHullMain   = input.int(25, "Base Hull MA (Main)", minval=15, maxval=40)
+baseHullFast   = input.int(9, "Base Hull MA (Fast)", minval=6, maxval=15)
+basePivotPeriod = input.int(2, "Base Pivot Period", minval=1, maxval=4)
+baseAtrFactor  = input.float(2.2, "Base ATR Factor", minval=1.8, maxval=3.0)
+baseAtrPeriod  = input.int(8, "Base ATR Period", minval=6, maxval=12)
+baseEnvLength  = input.int(12, "Base Envelope Period", minval=8, maxval=20)
+baseEnvDev     = input.float(0.8, "Base Envelope Deviation %", minval=0.5, maxval=1.5)
+baseRsiPeriod  = input.int(6, "Base RSI Period", minval=4, maxval=10)
+rsiOverbought  = input.float(75, "RSI Overbought", minval=70, maxval=85)
+rsiOversold    = input.float(25, "RSI Oversold", minval=15, maxval=30)
+useVolumeFilter = input.bool(true, "Use Volume Filter")
+baseVolumeThreshold = input.float(0.6, "Base Volume Threshold", minval=0.3, maxval=1.2)
+useMomentumFilter   = input.bool(true, "Use Momentum Filter")
+useMarketRegime     = input.bool(true, "Use Market Regime Detection")
+
+// Session-based filters
+enableSessionFilters = input.bool(true, "Enable Session Filters")
+preMarketStart       = input.int(600, "Pre-Market Start (ET)")
+regularSessionStart  = input.int(930, "Regular Session Start (ET)")
+regularSessionEnd    = input.int(1600, "Regular Session End (ET)")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 16: INSTRUMENT-OPTIMIZED PARAMETERS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Hull MA periods adjusted per instrument
+hullPeriodMain = isMYM ? math.round(baseHullMain * 0.75) : isMNQ ? math.round(baseHullMain * 0.75) : isMES ? math.round(baseHullMain * 0.75) : isMCL ? math.round(baseHullMain * 0.85) : isMGC ? baseHullMain : isM2K ? math.round(baseHullMain * 0.8) : baseHullMain
+hullPeriodFast = isMYM ? math.round(baseHullFast * 0.85) : isMNQ ? math.round(baseHullFast * 0.85) : isMES ? math.round(baseHullFast * 0.85) : isMCL ? math.round(baseHullFast * 0.9) : isMGC ? baseHullFast : isM2K ? math.round(baseHullFast * 0.9) : baseHullFast
+
+// ATR and SuperTrend adjusted per instrument
+pivotPeriod = basePivotPeriod
+atrFactor   = isMYM ? baseAtrFactor * 1.2 : isMNQ ? baseAtrFactor * 1.1 : isMES ? baseAtrFactor * 1.1 : isMCL ? baseAtrFactor * 1.05 : isMGC ? baseAtrFactor : isM2K ? baseAtrFactor * 1.15 : baseAtrFactor
+atrPeriod   = isMYM ? math.round(baseAtrPeriod * 1.1) : isMNQ ? baseAtrPeriod : isMES ? baseAtrPeriod : isMCL ? baseAtrPeriod : isMGC ? math.round(baseAtrPeriod * 1.1) : isM2K ? math.round(baseAtrPeriod * 1.05) : baseAtrPeriod
+
+// Envelope adjusted per instrument
+envLength = isMYM ? math.round(baseEnvLength * 1.0) : isMNQ ? math.round(baseEnvLength * 1.0) : isMES ? math.round(baseEnvLength * 1.0) : isMCL ? baseEnvLength : isMGC ? math.round(baseEnvLength * 1.1) : isM2K ? math.round(baseEnvLength * 1.05) : baseEnvLength
+envDev    = isMYM ? baseEnvDev * 1.1 : isMNQ ? baseEnvDev * 1.0 : isMES ? baseEnvDev * 1.0 : isMCL ? baseEnvDev * 1.0 : isMGC ? baseEnvDev * 0.95 : isM2K ? baseEnvDev * 1.05 : baseEnvDev
+
+// RSI and volume adjusted per instrument
+rsiPeriod       = isMYM ? math.round(baseRsiPeriod * 0.95) : isMNQ ? baseRsiPeriod : isMES ? baseRsiPeriod : isMCL ? math.round(baseRsiPeriod * 1.1) : isMGC ? math.round(baseRsiPeriod * 1.2) : isM2K ? baseRsiPeriod : baseRsiPeriod
+volumeThreshold = isMYM ? baseVolumeThreshold * 0.85 : isMNQ ? baseVolumeThreshold * 0.9 : isMES ? baseVolumeThreshold * 0.9 : isMCL ? baseVolumeThreshold * 1.0 : isMGC ? baseVolumeThreshold : isM2K ? baseVolumeThreshold * 0.95 : baseVolumeThreshold
+maxHoldingBars  = isMYM ? math.round(baseMaxHolding * 0.95) : isMNQ ? baseMaxHolding : isMES ? baseMaxHolding : isMCL ? math.round(baseMaxHolding * 1.2) : isMGC ? math.round(baseMaxHolding * 1.4) : isM2K ? math.round(baseMaxHolding * 1.1) : baseMaxHolding
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 17: SLIPPAGE BUFFER CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX #3: Slippage buffer in price units (ticks × mintick)
+slippageTicks = isMES ? slippageTicks_MES : isMNQ ? slippageTicks_MNQ : isMYM ? slippageTicks_MYM : isMCL ? slippageTicks_MCL : isMGC ? slippageTicks_MGC : isM2K ? slippageTicks_M2K : 4
+slippageBuffer = enableSlippageBuffer ? slippageTicks * syminfo.mintick : 0.0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 18: SESSION TIME DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+currentHour   = hour
+currentMinute = minute
+currentTimeET = currentHour * 100 + currentMinute
+
+isNoTradeZone   = enableNoTradeZone and (currentTimeET >= 0 and currentTimeET < 600)
+isAsianSession  = enableAsianSession and enable24_7Trading and ((currentTimeET >= 1900) or (currentTimeET < 300))
+isLondonSession = enableLondonSession and enable24_7Trading and (currentTimeET >= 300 and currentTimeET < 1200)
+isNYSession     = enableNYSession and (currentTimeET >= 930 and currentTimeET <= 1600)
+isUAESession    = enableUAESession and enable24_7Trading and (currentTimeET >= 0 and currentTimeET < 800)
+
+isOptimalForAsian  = str.contains(asianBestInstruments, instrumentName)
+isOptimalForLondon = str.contains(londonBestInstruments, instrumentName)
+isOptimalForNY     = str.contains(nyBestInstruments, instrumentName)
+isOptimalForUAE    = str.contains(uaeBestInstruments, instrumentName)
+
+var float activeSessionMultiplier = 1.0
+if isAsianSession and isOptimalForAsian
+    activeSessionMultiplier := asianMultiplier
+else if isLondonSession and isOptimalForLondon
+    activeSessionMultiplier := londonMultiplier
+else if isNYSession and isOptimalForNY
+    activeSessionMultiplier := nyMultiplier
+else if isUAESession and isOptimalForUAE
+    activeSessionMultiplier := uaeMultiplier
+else if enable24_7Trading
+    activeSessionMultiplier := 0.7
+else
+    activeSessionMultiplier := 1.0
+
+canTradeNow = not isNoTradeZone
+
+isPreMarket      = enableSessionFilters and currentTimeET >= preMarketStart and currentTimeET < regularSessionStart
+isRegularSession = enableSessionFilters and currentTimeET >= regularSessionStart and currentTimeET <= regularSessionEnd
+isEndOfDay       = currentTimeET >= endOfDayTime
+currentTime      = math.round(hour * 100 + minute)
+
+getActiveSession() =>
+    isAsianSession ? "ASIAN" : isLondonSession ? "LONDON" : isNYSession ? "NY" : isUAESession ? "UAE" : "REGULAR"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 19: HULL MOVING AVERAGES
+// ═══════════════════════════════════════════════════════════════════════════════
+hma(src, len) =>
+    half_length = math.round(len / 2)
+    sqrt_length = math.round(math.sqrt(len))
+    ta.wma(2 * ta.wma(src, half_length) - ta.wma(src, len), sqrt_length)
+
+hullMain = hma(hullSrc, math.max(hullPeriodMain, 2))
+hullFast = hma(hullSrc, math.max(hullPeriodFast, 2))
+
+slopeMain = hullMain > hullMain[1] ? 1 : hullMain < hullMain[1] ? -1 : 0
+slopeFast = hullFast > hullFast[1] ? 1 : hullFast < hullFast[1] ? -1 : 0
+
+hullAnyBullish   = slopeMain == 1 or slopeFast == 1
+hullAnyBearish   = slopeMain == -1 or slopeFast == -1
+hullAcceleration = (slopeMain == slopeFast) and (slopeFast != 0)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 20: SUPERTREND
+// ═══════════════════════════════════════════════════════════════════════════════
+ph = ta.pivothigh(pivotPeriod, pivotPeriod)
+pl = ta.pivotlow(pivotPeriod, pivotPeriod)
+
+var float center = na
+lastpp = not na(ph) ? ph : not na(pl) ? pl : na
+if not na(lastpp)
+    center := na(center) ? lastpp : (center + lastpp) / 2
+else if na(center)
+    center := close
+
+atrSuperTrend = ta.atr(atrPeriod)
+upBand = na(center) ? close - atrFactor * atrSuperTrend : center - atrFactor * atrSuperTrend
+dnBand = na(center) ? close + atrFactor * atrSuperTrend : center + atrFactor * atrSuperTrend
+
+var float trUp  = na
+var float trDn  = na
+var int trend   = 1
+
+trUp  := close[1] > trUp[1] ? math.max(upBand, trUp[1]) : upBand
+trDn  := close[1] < trDn[1] ? math.min(dnBand, trDn[1]) : dnBand
+trend := close > trDn[1] ? 1 : close < trUp[1] ? -1 : trend[1]
+
+trendChange       = trend != trend[1]
+bullishTrendStart = trend == 1 and trend[1] == -1
+bearishTrendStart = trend == -1 and trend[1] == 1
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 21: ADX (CHOPPY MARKET DETECTION)
+// ═══════════════════════════════════════════════════════════════════════════════
+dirmov(len) =>
+    up   = ta.change(high)
+    down = -ta.change(low)
+    plusDM  = na(up) ? na : (up > down and up > 0 ? up : 0)
+    minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
+    truerange = ta.rma(ta.tr, len)
+    plus  = fixnan(100 * ta.rma(plusDM, len) / truerange)
+    minus = fixnan(100 * ta.rma(minusDM, len) / truerange)
+    [plus, minus]
+
+adx(dilen, adxlen) =>
+    [plus, minus] = dirmov(dilen)
+    sum = plus + minus
+    adxVal = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), adxlen)
+    adxVal
+
+adxValue  = adx(14, 14)
+isLowADX  = adxValue < choppyADXThreshold
+
+atrCurrent = ta.atr(14)
+atrAvg     = ta.sma(atrCurrent, 20)
+isLowATR   = atrCurrent < (atrAvg * choppyATRMultiplier)
+
+bbBasis  = ta.sma(close, 20)
+bbDev    = ta.stdev(close, 20)
+bbUpper  = bbBasis + (bbDev * 2)
+bbLower  = bbBasis - (bbDev * 2)
+bbWidth  = (bbUpper - bbLower) / bbBasis
+isTightBB = bbWidth < choppyBBWidthThreshold
+
+choppyCount = (isLowADX ? 1 : 0) + (isLowATR ? 1 : 0) + (isTightBB ? 1 : 0)
+isChoppyRaw = choppyCount >= 2
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 22: MARKET REGIME & TREND STRENGTH
+// ═══════════════════════════════════════════════════════════════════════════════
+baseTrendPeriod    = 6
+baseVolPeriod      = 6
+trendStrengthPeriod = isMYM ? math.round(baseTrendPeriod * 0.95) : isMNQ ? baseTrendPeriod : isMES ? baseTrendPeriod : isMCL ? math.round(baseTrendPeriod * 1.2) : isMGC ? math.round(baseTrendPeriod * 1.3) : isM2K ? math.round(baseTrendPeriod * 1.1) : baseTrendPeriod
+volatilityPeriod   = isMYM ? math.round(baseVolPeriod * 0.95) : isMNQ ? baseVolPeriod : isMES ? baseVolPeriod : isMCL ? math.round(baseVolPeriod * 1.1) : isMGC ? math.round(baseVolPeriod * 1.2) : isM2K ? baseVolPeriod : baseVolPeriod
+
+priceRange    = ta.highest(high, trendStrengthPeriod) - ta.lowest(low, trendStrengthPeriod)
+trendStrength = priceRange > 0 ? math.abs(close - close[trendStrengthPeriod]) / priceRange : 0
+strongTrend   = trendStrength > 0.15
+rangingMarket = trendStrength < 0.08
+moderateTrend = not strongTrend and not rangingMarket
+
+currentVol      = ta.atr(volatilityPeriod)
+avgVol          = ta.sma(ta.atr(volatilityPeriod), volatilityPeriod)
+highVolatility  = currentVol > avgVol * 1.1
+normalVolatility = not highVolatility
+
+// FIX #12: Choppy filter now properly blocks ranging markets
+isChoppy = enableChoppyFilter ? (disableChoppyInTrend ? (isChoppyRaw and not strongTrend) : isChoppyRaw) : false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 23: STRONG TREND OVERRIDE
+// ═══════════════════════════════════════════════════════════════════════════════
+consecutiveBullCandles = 0
+consecutiveBearCandles = 0
+for i = 0 to consecutiveCandlesRequired - 1
+    if close[i] > open[i]
+        consecutiveBullCandles := consecutiveBullCandles + 1
+    if close[i] < open[i]
+        consecutiveBearCandles := consecutiveBearCandles + 1
+
+volumeMA     = ta.sma(volume, 20)
+isStrongVol  = volume > volumeMA * trendOverrideVolMultiplier
+avgRange     = ta.atr(14)
+currentRange = high - low
+isStrongRange = currentRange > avgRange * trendOverrideRangeMultiplier
+
+hasStrongTrendOverrideBull = enableTrendOverride and (consecutiveBullCandles >= consecutiveCandlesRequired) and isStrongVol and isStrongRange
+hasStrongTrendOverrideBear = enableTrendOverride and (consecutiveBearCandles >= consecutiveCandlesRequired) and isStrongVol and isStrongRange
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 24: MOMENTUM INDICATORS
+// ═══════════════════════════════════════════════════════════════════════════════
+rsi    = ta.rsi(close, rsiPeriod)
+stoch  = ta.stoch(close, high, low, rsiPeriod)
+stochK = ta.sma(stoch, 3)
+
+momentumBullish = highWinRateMode ?
+     (rsi > minRSIForEntry and rsi < 65 and stochK > 25 and stochK < 75) :
+     (not useMomentumFilter or (rsi > 35 and rsi < rsiOverbought and stochK > 25))
+
+momentumBearish = highWinRateMode ?
+     (rsi < maxRSIForEntry and rsi > 35 and stochK < 75 and stochK > 25) :
+     (not useMomentumFilter or (rsi < 65 and rsi > rsiOversold and stochK < 75))
+
+notOverbought = rsi < 72
+notOversold   = rsi > 28
+
+strongMomentumBull = rsi > 45 and rsi < 70 and stochK > 35 and stochK < 80
+strongMomentumBear = rsi < 55 and rsi > 30 and stochK < 65 and stochK > 20
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 25: VOLUME CONFIRMATION
+// ═══════════════════════════════════════════════════════════════════════════════
+volumeConfirm = not useVolumeFilter or (volume > volumeMA * volumeThreshold)
+strongVolume  = volume > volumeMA * 1.2
+normalVolume  = volume >= volumeMA * 0.7
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 26: CANDLE DIRECTION (STRICT)
+// ═══════════════════════════════════════════════════════════════════════════════
+candleBull = close > open
+candleBear = close < open
+bodySize   = math.abs(close - open)
+atr10      = ta.atr(10)
+bodyStrong = not requireBodyStrength or (atr10 > 0 and bodySize >= atr10 * minBodyPctOfATR)
+
+// Impulse detection (must respect candle direction)
+volBase    = ta.sma(volume, 50)
+volSurgeNow = (volBase > 0) and (volume >= volBase * impulseVolMult)
+barMove     = math.abs(close - open)
+impulseMove = (atr10 > 0) and (barMove >= atr10 * impulseATRMult)
+
+impulseLong  = enableImpulseOverride and candleBull and impulseMove and volSurgeNow
+impulseShort = enableImpulseOverride and candleBear and impulseMove and volSurgeNow
+
+// Envelope
+smaBasis = ta.sma(close, math.max(envLength, 2))
+upperEnv = smaBasis * (1 + envDev / 100)
+lowerEnv = smaBasis * (1 - envDev / 100)
+microBreakoutUp = close > upperEnv * 1.005 and strongVolume
+microBreakoutDn = close < lowerEnv * 0.995 and strongVolume
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 27: SIGNAL GENERATION (QUALITY-FOCUSED)
+// FIX #13: Removed MICRO and INSTANT signals - too low quality for live trading
+// Only STRONG, SCALP, and IMPULSE signals remain
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// STRONG SIGNALS: Full alignment (highest quality)
+strongBuySignal  = enableStrongSignals and candleBull and bodyStrong and hullAnyBullish and trend == 1 and momentumBullish and slopeMain == 1 and volumeConfirm
+strongSellSignal = enableStrongSignals and candleBear and bodyStrong and hullAnyBearish and trend == -1 and momentumBearish and slopeMain == -1 and volumeConfirm
+
+// SCALP SIGNALS: Momentum + trend (good quality)
+scalpBuySignal  = enableScalpSignals and candleBull and bodyStrong and strongMomentumBull and slopeMain == 1 and trend == 1 and (close > smaBasis) and normalVolume
+scalpSellSignal = enableScalpSignals and candleBear and bodyStrong and strongMomentumBear and slopeMain == -1 and trend == -1 and (close < smaBasis) and normalVolume
+
+// IMPULSE SIGNALS: Breakout with volume (for catching big moves)
+impulseBuySignal  = enableImpulseSignals and impulseLong and trend == 1
+impulseSellSignal = enableImpulseSignals and impulseShort and trend == -1
+
+// Combined base signal
+ultraBuySignalBase  = (strongBuySignal or scalpBuySignal or impulseBuySignal) and (not highWinRateMode or notOversold)
+ultraSellSignalBase = (strongSellSignal or scalpSellSignal or impulseSellSignal) and (not highWinRateMode or notOverbought)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 28: CONFLUENCE SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+confluenceVolumeOK   = confluenceLevel <= 3 ? true : volumeConfirm
+confluenceMomentumOK = confluenceLevel <= 6 ? true : (strongMomentumBull or strongMomentumBear)
+confluenceTrendOK    = confluenceLevel <= 9 ? true : (strongTrend or moderateTrend)
+confluenceSessionOK  = confluenceLevel <= 9 ? true : (isRegularSession or isPreMarket)
+confluenceExtraStrict = confluenceLevel <= 12 ? true : (strongTrend and normalVolatility and volumeConfirm)
+finalConfluenceOK    = confluenceVolumeOK and confluenceMomentumOK and confluenceTrendOK and confluenceSessionOK and confluenceExtraStrict
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 29: ENTRY FILTERS (ALL MUST AGREE)
+// FIX #5: Filters, signals, and SL now cooperate instead of blocking each other
+// ═══════════════════════════════════════════════════════════════════════════════
+// Candle direction (mandatory)
+longBarOK  = bodyStrong and (not requireCandleDirection or candleBull)
+shortBarOK = bodyStrong and (not requireCandleDirection or candleBear)
+
+// Volatility / choppy filter
+volatilityOK = not isChoppy or hasStrongTrendOverrideBull or hasStrongTrendOverrideBear or impulseLong or impulseShort
+
+// Session
+sessionAdjustedSignal = not enableSessionFilters or isRegularSession or isPreMarket
+
+// ADX trending filter (only enter when market is trending, exception for impulse/override)
+adxTrendingOK = adxValue >= choppyADXThreshold or hasStrongTrendOverrideBull or hasStrongTrendOverrideBear or impulseLong or impulseShort
+
+// FINAL SIGNAL ASSEMBLY
+ultraBuySignal = ultraBuySignalBase and sessionAdjustedSignal and volatilityOK and finalConfluenceOK and longBarOK and adxTrendingOK and candleBull
+ultraSellSignal = ultraSellSignalBase and sessionAdjustedSignal and volatilityOK and finalConfluenceOK and shortBarOK and adxTrendingOK and candleBear
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 30: POSITION TRACKING
+// FIX #5: barsInPosition now counts BARS not TICKS
+// ═══════════════════════════════════════════════════════════════════════════════
+var float entryPrice       = na
+var int   entryBar         = na
+var bool  isLongPosition   = false
+var bool  isShortPosition  = false
+var float maxProfit        = 0.0
+var float currentProfit    = 0.0
+var float currentProfitDollars = 0.0
+var float peakProfit       = 0.0
+var int   todayTradeCount  = 0
+
+// FIX #5: Use bar_index difference for actual bar count (not tick count)
+barsInPosition = (strategy.position_size != 0 and not na(entryBar)) ? (bar_index - entryBar) : 0
+
+// Daily reset
+if ta.change(dayofweek) != 0 or barstate.isfirst
+    todayTradeCount := 0
+
+// Track entry
+if strategy.position_size != 0 and strategy.position_size[1] == 0
+    entryPrice     := strategy.position_avg_price
+    entryBar       := bar_index
+    maxProfit      := 0.0
+    peakProfit     := 0.0
+    isLongPosition := strategy.position_size > 0
+    isShortPosition := strategy.position_size < 0
+    todayTradeCount := todayTradeCount + 1
+
+// Track P&L while in position
+if strategy.position_size != 0 and not na(entryPrice)
+    currentProfit        := isLongPosition ? (close - entryPrice) : (entryPrice - close)
+    maxProfit            := math.max(maxProfit, currentProfit)
+    currentProfitDollars := currentProfit * syminfo.pointvalue
+    peakProfit           := math.max(peakProfit, currentProfitDollars)
+
+// Reset on exit
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    entryPrice          := na
+    entryBar            := na
+    maxProfit           := 0.0
+    currentProfit       := 0.0
+    isLongPosition      := false
+    isShortPosition     := false
+    peakProfit          := 0.0
+    currentProfitDollars := 0.0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 31: LOSS COOLDOWN SYSTEM (NEW IN V.18)
+// FIX #11: Prevents revenge trading after stop outs
+// ═══════════════════════════════════════════════════════════════════════════════
+var int   lastLossBar         = 0
+var int   consecutiveLosses   = 0
+var bool  inCooldown          = false
+
+// Detect a losing trade close
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    if strategy.closedtrades > 0
+        lastTradeProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+        if lastTradeProfit < 0
+            lastLossBar       := bar_index
+            consecutiveLosses := consecutiveLosses + 1
+        else
+            consecutiveLosses := 0
+
+// Reset consecutive losses on new day
+if ta.change(dayofweek) != 0
+    consecutiveLosses := 0
+
+// Calculate cooldown
+activeCooldownBars = consecutiveLosses >= cooldownAfterConsecutiveLosses ? extraCooldownBars : cooldownBars
+inCooldown := enableLossCooldown and (bar_index - lastLossBar) < activeCooldownBars and lastLossBar > 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 32: UNIFIED SL/TP CALCULATION
+// FIX #2: Single SL/TP used for BOTH strategy.exit AND alert JSON
+// FIX #3: Includes slippage buffer
+// ═══════════════════════════════════════════════════════════════════════════════
+safeATR = math.max(ta.atr(10), syminfo.mintick * 10)
+
+// Get per-instrument SL distance (in price units)
+getActiveSL() =>
+    float sl = 0.0
+    if isMES
+        sl := mes_useCustom ? mes_customSL : 7.0
+    else if isMNQ
+        sl := mnq_useCustom ? mnq_customSL : 25.0
+    else if isMYM
+        sl := mym_useCustom ? mym_customSL : 60.0
+    else if isMCL
+        sl := mcl_useCustom ? mcl_customSL : 0.30
+    else if isMGC
+        sl := mgc_useCustom ? mgc_customSL : 4.0
+    else if isM2K
+        sl := m2k_useCustom ? m2k_customSL : 9.0
+    else
+        sl := safeATR * 2.0
+    sl
+
+// Get per-instrument TP distance (in price units)
+getActiveTP() =>
+    float tp = 0.0
+    if isMES
+        tp := mes_useCustom ? mes_customTP : 10.0
+    else if isMNQ
+        tp := mnq_useCustom ? mnq_customTP : 35.0
+    else if isMYM
+        tp := mym_useCustom ? mym_customTP : 90.0
+    else if isMCL
+        tp := mcl_useCustom ? mcl_customTP : 0.50
+    else if isMGC
+        tp := mgc_useCustom ? mgc_customTP : 7.0
+    else if isM2K
+        tp := m2k_useCustom ? m2k_customTP : 14.0
+    else
+        tp := safeATR * 3.0
+    tp
+
+// Get per-instrument quantity
+getActiveQty(baseQty) =>
+    int qty = baseQty
+    if isMES and mes_useCustom
+        qty := mes_customQty
+    else if isMNQ and mnq_useCustom
+        qty := mnq_customQty
+    else if isMYM and mym_useCustom
+        qty := mym_customQty
+    else if isMCL and mcl_useCustom
+        qty := mcl_customQty
+    else if isMGC and mgc_useCustom
+        qty := mgc_customQty
+    else if isM2K and m2k_useCustom
+        qty := m2k_customQty
+    qty
+
+getBackupSL() =>
+    isMES ? backupSL_MES : isMNQ ? backupSL_MNQ : isMYM ? backupSL_MYM : isMCL ? backupSL_MCL : isMGC ? backupSL_MGC : backupSL_Default
+
+// === UNIFIED SL/TP VALUES (used everywhere) ===
+baseSLDistance = getActiveSL()
+baseTPDistance = getActiveTP()
+
+// FIX #3: Widen SL by slippage buffer (so fill slippage doesn't put you too close to stop)
+// FIX: Apply high win rate wider SL here (not in exit logic separately)
+slMultiplier   = highWinRateMode ? widerSLMultiplier : 1.0
+tpMultiplier   = highWinRateMode ? quickTPMultiplier : 1.0
+
+unifiedSLDistance = (baseSLDistance * slMultiplier) + slippageBuffer
+unifiedTPDistance = baseTPDistance * tpMultiplier
+
+// Convert to ticks for strategy.exit
+unifiedSLTicks = math.round(unifiedSLDistance / syminfo.mintick)
+unifiedTPTicks = math.round(unifiedTPDistance / syminfo.mintick)
+
+// Trailing stop parameters
+// Trail activates when price moves past breakeven + slippage + activation buffer
+trailActivationDistance = slippageBuffer + (safeATR * trailActivationATRMult)
+trailActivationTicks   = math.round(trailActivationDistance / syminfo.mintick)
+trailDistanceTicks     = math.round((safeATR * trailDistanceATRMult) / syminfo.mintick)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 33: POSITION SIZING
+// ═══════════════════════════════════════════════════════════════════════════════
+baseQty = useFixedContractSize ? fixedContracts : 1
+tradeQty = getActiveQty(baseQty)
+finalContractQty = int(math.max(math.min(tradeQty, 10), 1))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 34: ENTRY CONDITIONS (SINGLE PATH - NO DUPLICATES)
+// FIX #1: Only ONE entry per signal, not two
+// FIX #8: pyramiding=0 prevents any double positions
+// ═══════════════════════════════════════════════════════════════════════════════
+maxTradesReached = enableDailyTradeLimit and todayTradeCount >= maxDailyTrades
+
+// Signal type detection
+var string activeSignalType = "NONE"
+
+getSignalType(isLong) =>
+    if isLong and impulseBuySignal
+        "IMPULSE"
+    else if not isLong and impulseSellSignal
+        "IMPULSE"
+    else if isLong and strongBuySignal
+        "STRONG"
+    else if not isLong and strongSellSignal
+        "STRONG"
+    else if isLong and scalpBuySignal
+        "SCALP"
+    else if not isLong and scalpSellSignal
+        "SCALP"
+    else
+        "UNKNOWN"
+
+// === FINAL ENTRY CONDITIONS ===
+longCondition = ultraBuySignal and
+     not isEndOfDay and
+     canTradeNow and
+     not maxTradesReached and
+     not inCooldown and
+     strategy.position_size == 0 and
+     candleBull and
+     finalContractQty > 0
+
+shortCondition = ultraSellSignal and
+     not isEndOfDay and
+     canTradeNow and
+     not maxTradesReached and
+     not inCooldown and
+     strategy.position_size == 0 and
+     candleBear and
+     finalContractQty > 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 35: ENTRY EXECUTION + ALERTS
+// FIX #1: Single entry path (no duplicate)
+// FIX #2: Alert SL/TP matches strategy.exit SL/TP exactly
+// FIX #9: Proper TradersPost bracket order JSON
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper for dollar conversion
+priceDiffToDollars(p1, p2) =>
+    math.abs(p1 - p2) * syminfo.pointvalue
+
+// === LONG ENTRY ===
+if longCondition
+    activeSignalType := hasStrongTrendOverrideBull ? "TREND_OVERRIDE" : getSignalType(true)
+
+    // Calculate exact SL/TP prices
+    float longSLPrice = close - unifiedSLDistance
+    float longTPPrice = close + unifiedTPDistance
+
+    // Execute strategy entry (for backtesting)
+    if not alertOnlyMode
+        strategy.entry("LONG", strategy.long, qty=finalContractQty, comment="LONG " + activeSignalType)
+
+    // Fire alert for TradersPost (for live trading)
+    if enableTradersPostAlerts
+        float slDollars = priceDiffToDollars(close, longSLPrice)
+        float tpDollars = priceDiffToDollars(longTPPrice, close)
+        if useManualDollarOverrides and manualDollarSL > 0
+            slDollars := manualDollarSL
+        if useManualDollarOverrides and manualDollarTP > 0
+            tpDollars := manualDollarTP
+
+        // FIX #9: Proper TradersPost bracket order format
+        string longMsg = '{"ticker":"' + getInstrumentTicker() + '"' +
+             ',"action":"buy"' +
+             ',"sentiment":"bullish"' +
+             ',"quantity":' + str.tostring(finalContractQty) +
+             ',"stopLoss":{"type":"stop","stopPrice":' + str.tostring(longSLPrice) + '}' +
+             ',"takeProfit":{"type":"limit","limitPrice":' + str.tostring(longTPPrice) + '}'
+        if enableDollarStops
+            longMsg := longMsg +
+                 ',"stopLossAmount":' + str.tostring(slDollars, "#.##") +
+                 ',"takeProfitAmount":' + str.tostring(tpDollars, "#.##")
+        longMsg := longMsg +
+             ',"strategy":"V18_PRODUCTION"' +
+             ',"signal":"' + activeSignalType + '"' +
+             ',"timeframe":"' + timeframe.period + '"' +
+             ',"instrument":"' + instrumentName + '"' +
+             ',"session":"' + getActiveSession() + '"' +
+             ',"adx":' + str.tostring(adxValue, "#.#") +
+             ',"rsi":' + str.tostring(rsi, "#.#") +
+             ',"slippage_buffer":' + str.tostring(slippageBuffer, "#.####") +
+             ',"candleDirection":"GREEN"}'
+        alert(longMsg, alert.freq_once_per_bar)
+
+// === SHORT ENTRY ===
+if shortCondition
+    activeSignalType := hasStrongTrendOverrideBear ? "TREND_OVERRIDE" : getSignalType(false)
+
+    float shortSLPrice = close + unifiedSLDistance
+    float shortTPPrice = close - unifiedTPDistance
+
+    if not alertOnlyMode
+        strategy.entry("SHORT", strategy.short, qty=finalContractQty, comment="SHORT " + activeSignalType)
+
+    if enableTradersPostAlerts
+        float slDollarsS = priceDiffToDollars(shortSLPrice, close)
+        float tpDollarsS = priceDiffToDollars(close, shortTPPrice)
+        if useManualDollarOverrides and manualDollarSL > 0
+            slDollarsS := manualDollarSL
+        if useManualDollarOverrides and manualDollarTP > 0
+            tpDollarsS := manualDollarTP
+
+        string shortMsg = '{"ticker":"' + getInstrumentTicker() + '"' +
+             ',"action":"sell"' +
+             ',"sentiment":"bearish"' +
+             ',"quantity":' + str.tostring(finalContractQty) +
+             ',"stopLoss":{"type":"stop","stopPrice":' + str.tostring(shortSLPrice) + '}' +
+             ',"takeProfit":{"type":"limit","limitPrice":' + str.tostring(shortTPPrice) + '}'
+        if enableDollarStops
+            shortMsg := shortMsg +
+                 ',"stopLossAmount":' + str.tostring(slDollarsS, "#.##") +
+                 ',"takeProfitAmount":' + str.tostring(tpDollarsS, "#.##")
+        shortMsg := shortMsg +
+             ',"strategy":"V18_PRODUCTION"' +
+             ',"signal":"' + activeSignalType + '"' +
+             ',"timeframe":"' + timeframe.period + '"' +
+             ',"instrument":"' + instrumentName + '"' +
+             ',"session":"' + getActiveSession() + '"' +
+             ',"adx":' + str.tostring(adxValue, "#.#") +
+             ',"rsi":' + str.tostring(rsi, "#.#") +
+             ',"slippage_buffer":' + str.tostring(slippageBuffer, "#.####") +
+             ',"candleDirection":"RED"}'
+        alert(shortMsg, alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 36: EXIT MANAGEMENT (UNIFIED - NO COMPETING LAYERS)
+// FIX #7:  strategy.exit uses from_entry parameter
+// FIX #4:  Trailing stop after breakeven + slippage
+// FIX #10: Single exit system instead of multiple competing layers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === PRIMARY EXIT: strategy.exit with SL + TP + TRAILING ===
+// This handles:
+//   - Hard stop loss (never moves down, includes slippage buffer)
+//   - Take profit (quick TP for high win rate)
+//   - Trailing stop (activates after BE + slippage, trails at ATR distance)
+
+if not alertOnlyMode and strategy.position_size > 0
+    if useTrailingStop and trailActivationTicks > 0 and trailDistanceTicks > 0
+        // FIX #4: Trail activates after price recovers slippage + small profit
+        strategy.exit("EXIT_LONG", from_entry="LONG",
+             loss=unifiedSLTicks,
+             profit=unifiedTPTicks,
+             trail_points=trailActivationTicks,
+             trail_offset=trailDistanceTicks,
+             comment="EXIT")
+    else
+        strategy.exit("EXIT_LONG", from_entry="LONG",
+             loss=unifiedSLTicks,
+             profit=unifiedTPTicks,
+             comment="SL/TP")
+
+if not alertOnlyMode and strategy.position_size < 0
+    if useTrailingStop and trailActivationTicks > 0 and trailDistanceTicks > 0
+        strategy.exit("EXIT_SHORT", from_entry="SHORT",
+             loss=unifiedSLTicks,
+             profit=unifiedTPTicks,
+             trail_points=trailActivationTicks,
+             trail_offset=trailDistanceTicks,
+             comment="EXIT")
+    else
+        strategy.exit("EXIT_SHORT", from_entry="SHORT",
+             loss=unifiedSLTicks,
+             profit=unifiedTPTicks,
+             comment="SL/TP")
+
+// === SAFETY EXITS (only for situations the primary exit can't handle) ===
+// FIX #10: These only fire for emergency situations, NOT competing with primary SL
+
+// Emergency Backup SL (absolute floor - in case strategy.exit somehow fails)
+if strategy.position_size != 0 and enableBackupSL and not na(entryPrice)
+    float backupDist     = getBackupSL()
+    float longBackupLvl  = entryPrice - backupDist
+    float shortBackupLvl = entryPrice + backupDist
+    if isLongPosition and close <= longBackupLvl
+        strategy.close_all(comment="BACKUP_SL")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"BACKUP_SL"}', alert.freq_once_per_bar)
+    if isShortPosition and close >= shortBackupLvl
+        strategy.close_all(comment="BACKUP_SL")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"BACKUP_SL"}', alert.freq_once_per_bar)
+
+// Nuclear exit (max time in position)
+// FIX #6: Uses bar-based count, not tick-based
+if strategy.position_size != 0 and enableNuclearExit
+    if barsInPosition >= nuclearMaxBars
+        strategy.close_all(comment="NUCLEAR_TIME")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"NUCLEAR_TIME"}', alert.freq_once_per_bar)
+
+    float backupDist   = getBackupSL()
+    float nuclearDist  = backupDist * nuclearExtraFactor
+    if isLongPosition and not na(entryPrice) and close <= (entryPrice - nuclearDist)
+        strategy.close_all(comment="NUCLEAR_PRICE")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"NUCLEAR_PRICE"}', alert.freq_once_per_bar)
+    if isShortPosition and not na(entryPrice) and close >= (entryPrice + nuclearDist)
+        strategy.close_all(comment="NUCLEAR_PRICE")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"NUCLEAR_PRICE"}', alert.freq_once_per_bar)
+
+// Max holding time exit
+if strategy.position_size != 0 and useMaxHoldingExit and barsInPosition >= maxHoldingBars
+    strategy.close_all(comment="MAX_HOLD_TIME")
+    if enableTradersPostAlerts
+        alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"MAX_HOLD_TIME"}', alert.freq_once_per_bar)
+
+// Signal reversal exit (strong opposite signal while in position)
+if strategy.position_size != 0 and useSignalReversalExits and barsInPosition >= 3
+    if isLongPosition and ultraSellSignal
+        strategy.close_all(comment="REVERSAL_EXIT")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"SIGNAL_REVERSAL"}', alert.freq_once_per_bar)
+    if isShortPosition and ultraBuySignal
+        strategy.close_all(comment="REVERSAL_EXIT")
+        if enableTradersPostAlerts
+            alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"SIGNAL_REVERSAL"}', alert.freq_once_per_bar)
+
+// End of day exit
+if strategy.position_size != 0 and useEndOfDayExits and isEndOfDay
+    strategy.close_all(comment="EOD_EXIT")
+    if enableTradersPostAlerts
+        alert('{"ticker":"' + getInstrumentTicker() + '","action":"exit","sentiment":"flat","reason":"END_OF_DAY"}', alert.freq_once_per_bar)
+
+// Reset signal type when flat
+if strategy.position_size == 0
+    activeSignalType := "NONE"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 37: VISUAL DISPLAY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === Indicator plots ===
+plot(hullMain, color=trend == 1 ? color.green : color.red, linewidth=2, title="Hull MA Main")
+plot(hullFast, color=color.gray, title="Hull MA Fast")
+plot(upperEnv, color=color.orange, title="Envelope Upper")
+plot(lowerEnv, color=color.orange, title="Envelope Lower")
+plot(trend == 1 ? trUp : trDn, color=trend == 1 ? color.green : color.red, linewidth=2, title="SuperTrend")
+
+// === Background colors ===
+bgcolor(isNoTradeZone ? color.new(color.red, 93) : na, title="No Trade Zone")
+bgcolor(isChoppy ? color.new(color.orange, 93) : na, title="Choppy Market")
+bgcolor(inCooldown ? color.new(color.purple, 93) : na, title="Loss Cooldown")
+bgcolor(isNYSession ? color.new(color.green, 97) : na, title="NY Session")
+
+// === Entry markers ===
+plotshape(longCondition and impulseBuySignal, location=location.belowbar, color=color.new(color.orange, 0), style=shape.triangleup, text="IMPULSE", size=size.large, title="Impulse Long")
+plotshape(longCondition and not impulseBuySignal and strongBuySignal, location=location.belowbar, color=color.green, style=shape.triangleup, text="STRONG", size=size.normal, title="Strong Long")
+plotshape(longCondition and not impulseBuySignal and not strongBuySignal and scalpBuySignal, location=location.belowbar, color=color.blue, style=shape.triangleup, text="SCALP", size=size.normal, title="Scalp Long")
+
+plotshape(shortCondition and impulseSellSignal, location=location.abovebar, color=color.new(color.orange, 0), style=shape.triangledown, text="IMPULSE", size=size.large, title="Impulse Short")
+plotshape(shortCondition and not impulseSellSignal and strongSellSignal, location=location.abovebar, color=color.red, style=shape.triangledown, text="STRONG", size=size.normal, title="Strong Short")
+plotshape(shortCondition and not impulseSellSignal and not strongSellSignal and scalpSellSignal, location=location.abovebar, color=color.maroon, style=shape.triangledown, text="SCALP", size=size.normal, title="Scalp Short")
+
+// === Info table ===
+var table infoTable = table.new(position.top_right, 4, 12, bgcolor=color.new(color.black, 85), border_width=1)
+if barstate.islast
+    table.clear(infoTable, 0, 0)
+
+    // Header
+    table.cell(infoTable, 0, 0, "V.18 PRODUCTION", text_color=color.white, bgcolor=color.new(color.teal, 50), text_size=size.small)
+    table.cell(infoTable, 1, 0, instrumentName, text_color=color.white, bgcolor=color.new(color.teal, 50), text_size=size.small)
+    table.cell(infoTable, 2, 0, timeframe.period, text_color=color.white, bgcolor=color.new(color.teal, 50), text_size=size.small)
+    table.cell(infoTable, 3, 0, getActiveSession(), text_color=color.white, bgcolor=color.new(color.teal, 50), text_size=size.small)
+
+    // SL/TP (unified values)
+    table.cell(infoTable, 0, 1, "SL", text_color=color.white, bgcolor=color.new(color.red, 70), text_size=size.small)
+    table.cell(infoTable, 1, 1, str.tostring(unifiedSLDistance, "#.##"), text_color=color.white, bgcolor=color.new(color.red, 70), text_size=size.small)
+    table.cell(infoTable, 2, 1, "TP", text_color=color.white, bgcolor=color.new(color.green, 70), text_size=size.small)
+    table.cell(infoTable, 3, 1, str.tostring(unifiedTPDistance, "#.##"), text_color=color.white, bgcolor=color.new(color.green, 70), text_size=size.small)
+
+    // Slippage buffer
+    table.cell(infoTable, 0, 2, "SLIP BUF", text_color=color.white, bgcolor=color.new(color.orange, 70), text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(slippageBuffer, "#.####"), text_color=color.white, bgcolor=color.new(color.orange, 70), text_size=size.small)
+    table.cell(infoTable, 2, 2, "TICKS", text_color=color.white, bgcolor=color.new(color.orange, 70), text_size=size.small)
+    table.cell(infoTable, 3, 2, str.tostring(slippageTicks), text_color=color.white, bgcolor=color.new(color.orange, 70), text_size=size.small)
+
+    // Trail
+    trailStatus = useTrailingStop ? "ON" : "OFF"
+    table.cell(infoTable, 0, 3, "TRAIL", text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.small)
+    table.cell(infoTable, 1, 3, trailStatus, text_color=useTrailingStop ? color.lime : color.red, bgcolor=color.new(color.blue, 70), text_size=size.small)
+    table.cell(infoTable, 2, 3, "ACT:" + str.tostring(trailActivationTicks) + "t", text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.small)
+    table.cell(infoTable, 3, 3, "DST:" + str.tostring(trailDistanceTicks) + "t", text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.small)
+
+    // Market state
+    choppyColor = isChoppy ? color.red : color.green
+    trendText = strongTrend ? "STRONG" : moderateTrend ? "MODERATE" : "RANGING"
+    table.cell(infoTable, 0, 4, "MARKET", text_color=color.white, bgcolor=color.new(color.purple, 70), text_size=size.small)
+    table.cell(infoTable, 1, 4, trendText, text_color=strongTrend ? color.lime : color.yellow, bgcolor=color.new(color.purple, 70), text_size=size.small)
+    table.cell(infoTable, 2, 4, isChoppy ? "CHOPPY" : "CLEAR", text_color=choppyColor, bgcolor=color.new(color.purple, 70), text_size=size.small)
+    table.cell(infoTable, 3, 4, "ADX:" + str.tostring(adxValue, "#.#"), text_color=adxValue >= choppyADXThreshold ? color.lime : color.red, bgcolor=color.new(color.purple, 70), text_size=size.small)
+
+    // Position info
+    posColor = strategy.position_size > 0 ? color.new(color.green, 70) : strategy.position_size < 0 ? color.new(color.red, 70) : color.new(color.gray, 70)
+    posText = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+    table.cell(infoTable, 0, 5, "POS", text_color=color.white, bgcolor=posColor, text_size=size.small)
+    table.cell(infoTable, 1, 5, posText, text_color=color.white, bgcolor=posColor, text_size=size.small)
+    table.cell(infoTable, 2, 5, "$" + str.tostring(currentProfitDollars, "#.##"), text_color=currentProfitDollars >= 0 ? color.lime : color.red, bgcolor=posColor, text_size=size.small)
+    table.cell(infoTable, 3, 5, str.tostring(barsInPosition) + " bars", text_color=color.white, bgcolor=posColor, text_size=size.small)
+
+    // Trades today
+    table.cell(infoTable, 0, 6, "TRADES", text_color=color.white, bgcolor=color.new(color.purple, 70), text_size=size.small)
+    table.cell(infoTable, 1, 6, str.tostring(todayTradeCount) + "/" + str.tostring(maxDailyTrades), text_color=maxTradesReached ? color.red : color.lime, bgcolor=color.new(color.purple, 70), text_size=size.small)
+    table.cell(infoTable, 2, 6, "SIGNAL", text_color=color.white, bgcolor=color.new(color.purple, 70), text_size=size.small)
+    table.cell(infoTable, 3, 6, activeSignalType, text_color=color.yellow, bgcolor=color.new(color.purple, 70), text_size=size.small)
+
+    // Cooldown
+    cdColor = inCooldown ? color.new(color.red, 70) : color.new(color.green, 70)
+    table.cell(infoTable, 0, 7, "COOLDOWN", text_color=color.white, bgcolor=cdColor, text_size=size.small)
+    table.cell(infoTable, 1, 7, inCooldown ? "ACTIVE" : "CLEAR", text_color=inCooldown ? color.red : color.lime, bgcolor=cdColor, text_size=size.small)
+    table.cell(infoTable, 2, 7, "LOSSES:" + str.tostring(consecutiveLosses), text_color=consecutiveLosses > 0 ? color.orange : color.lime, bgcolor=cdColor, text_size=size.small)
+    table.cell(infoTable, 3, 7, "MODE:" + (highWinRateMode ? "HWR" : "STD"), text_color=highWinRateMode ? color.lime : color.yellow, bgcolor=cdColor, text_size=size.small)
+
+    // Candle direction
+    candleColor = candleBull ? color.new(color.lime, 70) : candleBear ? color.new(color.red, 70) : color.new(color.gray, 70)
+    candleText = candleBull ? "GREEN" : candleBear ? "RED" : "DOJI"
+    table.cell(infoTable, 0, 8, "CANDLE", text_color=color.white, bgcolor=candleColor, text_size=size.small)
+    table.cell(infoTable, 1, 8, candleText, text_color=color.white, bgcolor=candleColor, text_size=size.small)
+    table.cell(infoTable, 2, 8, "VOL:" + (volumeConfirm ? "OK" : "LOW"), text_color=volumeConfirm ? color.lime : color.red, bgcolor=candleColor, text_size=size.small)
+    table.cell(infoTable, 3, 8, "MOM:" + (strongMomentumBull or strongMomentumBear ? "OK" : "WEAK"), text_color=(strongMomentumBull or strongMomentumBear) ? color.lime : color.red, bgcolor=candleColor, text_size=size.small)
+
+    // Safety systems
+    table.cell(infoTable, 0, 9, "SAFETY", text_color=color.white, bgcolor=color.new(color.orange, 70), text_size=size.small)
+    table.cell(infoTable, 1, 9, "BACKUP:" + (enableBackupSL ? "ON" : "OFF"), text_color=enableBackupSL ? color.lime : color.red, bgcolor=color.new(color.orange, 70), text_size=size.small)
+    table.cell(infoTable, 2, 9, "NUCLEAR:" + (enableNuclearExit ? "ON" : "OFF"), text_color=enableNuclearExit ? color.lime : color.red, bgcolor=color.new(color.orange, 70), text_size=size.small)
+    table.cell(infoTable, 3, 9, "CONF:" + str.tostring(confluenceLevel), text_color=color.white, bgcolor=color.new(color.orange, 70), text_size=size.small)
+
+    // Override status
+    overrideActive = hasStrongTrendOverrideBull or hasStrongTrendOverrideBear
+    impulseActive = impulseLong or impulseShort
+    ovColor = overrideActive ? color.new(color.lime, 70) : impulseActive ? color.new(color.orange, 70) : color.new(color.gray, 70)
+    table.cell(infoTable, 0, 10, "OVERRIDE", text_color=color.white, bgcolor=ovColor, text_size=size.small)
+    table.cell(infoTable, 1, 10, overrideActive ? "TREND" : impulseActive ? "IMPULSE" : "NONE", text_color=color.white, bgcolor=ovColor, text_size=size.small)
+    table.cell(infoTable, 2, 10, "RSI:" + str.tostring(rsi, "#.#"), text_color=color.white, bgcolor=ovColor, text_size=size.small)
+    table.cell(infoTable, 3, 10, "K:" + str.tostring(stochK, "#.#"), text_color=color.white, bgcolor=ovColor, text_size=size.small)
+
+    // Alert status
+    table.cell(infoTable, 0, 11, "ALERTS", text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.small)
+    table.cell(infoTable, 1, 11, enableTradersPostAlerts ? "LIVE" : "OFF", text_color=enableTradersPostAlerts ? color.lime : color.red, bgcolor=color.new(color.blue, 70), text_size=size.small)
+    table.cell(infoTable, 2, 11, alertOnlyMode ? "ALERT ONLY" : "FULL", text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.small)
+    table.cell(infoTable, 3, 11, "QTY:" + str.tostring(finalContractQty), text_color=color.white, bgcolor=color.new(color.blue, 70), text_size=size.small)
