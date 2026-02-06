@@ -1,0 +1,768 @@
+//@version=5
+strategy("2.6.2026 DRAFT MGC1! PT RUN TESt 11.21.2025 80% WIN RATE SYSTEM — Strategy + Alert-Only (TradersPost) — 10-Point Confluence",
+     overlay=true,
+     initial_capital=25000,
+     pyramiding=0,
+     process_orders_on_close=true,
+     max_bars_back=500)
+// =====================================================================
+// 🎯 MGC 80% WIN RATE SYSTEM (ALERT ONLY)
+// =====================================================================
+// Strategy + alert-only hybrid:
+// - Use strategy orders for backtesting when enabled
+// - Use alert() JSON webhooks for live TradersPost automation
+// - Maintains internal state for alert sequencing/metrics
+//
+// Recommended TradingView alert:
+// - Condition: "Any alert() function call"
+// - Frequency: "Once per bar close"
+// =====================================================================
+// ==============================
+// 🎯 INSTRUMENT VERIFICATION
+// ==============================
+isMGC = str.contains(syminfo.ticker, "MGC") or str.contains(syminfo.ticker, "GC")
+if not isMGC
+    runtime.error("⚠️ This indicator is optimized for MGC/GC only. Please switch to an MGC chart.")
+// ==============================
+// 📊 CONFLUENCE SETTINGS
+// ==============================
+minConfluenceScore = input.int(7, "Minimum Confluence Score (7-10)", minval=6, maxval=10,
+     tooltip="Higher = fewer trades but higher quality. 7 is the intended default.")
+adxThreshold = input.float(30.0, "ADX Threshold (Strong Trends Only)", minval=20.0, maxval=40.0)
+minTrendStrength = input.float(0.40, "Min Trend Strength", minval=0.30, maxval=0.60)
+maxTradesPerDay = input.int(5, "Max Trades Per Day", minval=3, maxval=8)
+minBarsBetweenTrades = input.int(15, "Min Bars Between Trades", minval=10, maxval=30)
+volumeRatioMin = input.float(1.5, "Volume Ratio Minimum", minval=1.2, maxval=2.0)
+srTolerance = input.float(0.3, "S/R Tolerance (ATR)", minval=0.2, maxval=0.5)
+// Make signals cooperate (avoid long/short conflicts)
+scoreDominance = input.int(2, "Min Score Dominance (avoid conflicts)", minval=0, maxval=5,
+     tooltip="Requires the chosen direction score to beat the opposite direction by this margin.")
+avoidOpposingSR = input.bool(true, "Avoid Opposing S/R (directional filter)",
+     tooltip="Longs blocked near resistance; shorts blocked near support.")
+// ==============================
+// 🕒 SESSION FILTERS
+// ==============================
+tradingHoursOnly = input.bool(true, "US Trading Hours Only")
+currentTime = math.round(hour * 100 + minute)
+inTradingHours = currentTime >= 930 and currentTime <= 1550
+sessionOK = not tradingHoursOnly or inTradingHours
+// Institutional time filters (no-trade windows)
+blockFirstMinutes = input.int(5, "Block First N Minutes After Open", minval=0, maxval=60,
+     tooltip="Avoid the opening volatility/whipsaws.")
+blockLastMinutes = input.int(5, "Block Last N Minutes Before Close", minval=0, maxval=60,
+     tooltip="Avoid end-of-session liquidity swings.")
+blockLunch = input.bool(false, "Block Lunch Window")
+lunchStartHHMM = input.int(1200, "Lunch Start (HHMM)", minval=0, maxval=2359)
+lunchEndHHMM = input.int(1330, "Lunch End (HHMM)", minval=0, maxval=2359)
+blockWindow1 = input.bool(false, "Block Custom Window #1")
+window1StartHHMM = input.int(1000, "Window #1 Start (HHMM)", minval=0, maxval=2359)
+window1EndHHMM = input.int(1015, "Window #1 End (HHMM)", minval=0, maxval=2359)
+blockWindow2 = input.bool(false, "Block Custom Window #2")
+window2StartHHMM = input.int(1400, "Window #2 Start (HHMM)", minval=0, maxval=2359)
+window2EndHHMM = input.int(1415, "Window #2 End (HHMM)", minval=0, maxval=2359)
+f_hhmm_to_min(hhmm) =>
+    hh = math.floor(hhmm / 100)
+    mm = hhmm - (hh * 100)
+    hh * 60 + mm
+openMin = f_hhmm_to_min(930)
+closeMin = f_hhmm_to_min(1550)
+nowMin = hour * 60 + minute
+inOpenBlock = blockFirstMinutes > 0 and nowMin >= openMin and nowMin < (openMin + blockFirstMinutes)
+inCloseBlock = blockLastMinutes > 0 and nowMin <= closeMin and nowMin > (closeMin - blockLastMinutes)
+inLunchBlock = blockLunch and nowMin >= f_hhmm_to_min(lunchStartHHMM) and nowMin <= f_hhmm_to_min(lunchEndHHMM)
+inCustom1 = blockWindow1 and nowMin >= f_hhmm_to_min(window1StartHHMM) and nowMin <= f_hhmm_to_min(window1EndHHMM)
+inCustom2 = blockWindow2 and nowMin >= f_hhmm_to_min(window2StartHHMM) and nowMin <= f_hhmm_to_min(window2EndHHMM)
+timeWindowsOK = not (inOpenBlock or inCloseBlock or inLunchBlock or inCustom1 or inCustom2)
+// ==============================
+// 📊 HIGHER TIMEFRAME CONFIRMATION
+// ==============================
+htfTimeframe = input.timeframe("15", "Higher Timeframe",
+     tooltip="15m for 5m charts, 1H for 15m charts")
+htf_close = request.security(syminfo.tickerid, htfTimeframe, close)
+htf_ema20 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 20))
+htf_ema50 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 50))
+htf_bullish = htf_close > htf_ema20 and htf_ema20 > htf_ema50
+htf_bearish = htf_close < htf_ema20 and htf_ema20 < htf_ema50
+// Institutional filter option: require HTF alignment (not just "points")
+requireHtfAlignment = input.bool(true, "Require HTF Alignment (institutional filter)",
+     tooltip="If ON, longs require HTF bullish and shorts require HTF bearish.")
+// Optional MTF (mid-timeframe) confirmation
+useMtfConfirmation = input.bool(false, "Use MTF Confirmation (optional)")
+mtfTimeframe = input.timeframe("60", "Mid Timeframe (MTF)", tooltip="Example: 60m. Used only if MTF confirmation is enabled.")
+mtf_close = request.security(syminfo.tickerid, mtfTimeframe, close)
+mtf_ema20 = request.security(syminfo.tickerid, mtfTimeframe, ta.ema(close, 20))
+mtf_ema50 = request.security(syminfo.tickerid, mtfTimeframe, ta.ema(close, 50))
+mtf_bullish = mtf_close > mtf_ema20 and mtf_ema20 > mtf_ema50
+mtf_bearish = mtf_close < mtf_ema20 and mtf_ema20 < mtf_ema50
+// ==============================
+// 📈 CORE INDICATORS
+// ==============================
+ema9 = ta.ema(close, 9)
+ema21 = ta.ema(close, 21)
+ema50 = ta.ema(close, 50)
+ema100 = ta.ema(close, 100)
+ema200 = ta.ema(close, 200)
+ema_bullish_aligned = ema9 > ema21 and ema21 > ema50 and ema50 > ema100 and ema100 > ema200
+ema_bearish_aligned = ema9 < ema21 and ema21 < ema50 and ema50 < ema100 and ema100 < ema200
+hullLen = 20
+hma(src, len) =>
+    half_length = math.round(len / 2)
+    sqrt_length = math.round(math.sqrt(len))
+    ta.wma(2 * ta.wma(src, half_length) - ta.wma(src, len), sqrt_length)
+hull = hma(close, hullLen)
+hull_bullish = hull > hull[1] and hull[1] > hull[2]
+hull_bearish = hull < hull[1] and hull[1] < hull[2]
+adxLen = 14
+f_adx(_len) =>
+    upMove = high - high[1]
+    downMove = low[1] - low
+    plusDM = (upMove > downMove and upMove > 0) ? upMove : 0.0
+    minusDM = (downMove > upMove and downMove > 0) ? downMove : 0.0
+    tr = ta.tr(true)
+    atr_val = ta.rma(tr, _len)
+    plusDI = atr_val != 0 ? 100 * ta.rma(plusDM, _len) / atr_val : 0.0
+    minusDI = atr_val != 0 ? 100 * ta.rma(minusDM, _len) / atr_val : 0.0
+    dx = (plusDI + minusDI) != 0 ? 100 * math.abs(plusDI - minusDI) / (plusDI + minusDI) : 0.0
+    ta.rma(dx, _len)
+adx = f_adx(adxLen)
+strongTrend = adx > adxThreshold
+[macdLine, signalLine, histLine] = ta.macd(close, 12, 26, 9)
+macd_bullish = macdLine > signalLine and histLine > 0
+macd_bearish = macdLine < signalLine and histLine < 0
+rsi = ta.rsi(close, 14)
+rsi_neutral = rsi > 35 and rsi < 65
+volumeMA = ta.sma(volume, 20)
+volumeSpike = volume > volumeMA * volumeRatioMin
+atr = ta.atr(14)
+// Institutional volatility/spike filters (avoid news/whipsaw candles)
+useVolatilityGuard = input.bool(true, "Volatility/Spike Guard (institutional)")
+maxAtrPct = input.float(0.60, "Max ATR% of Price", minval=0.10, maxval=3.0,
+     tooltip="Blocks entries when ATR is too large relative to price (news/high-vol regimes).")
+maxRangeATR = input.float(2.5, "Max Candle Range (ATR)", minval=0.5, maxval=10.0,
+     tooltip="Blocks entries on huge candles relative to ATR (spike candles).")
+atrPct = close != 0 ? (atr / close) * 100.0 : na
+rangeAtr = atr != 0 ? (high - low) / atr : na
+volatilityOK = not useVolatilityGuard or ((not na(atrPct) and atrPct <= maxAtrPct) and (not na(rangeAtr) and rangeAtr <= maxRangeATR))
+// ==============================
+// 📊 SUPPORT/RESISTANCE DETECTION
+// ==============================
+pivotHighs = ta.pivothigh(high, 5, 5)
+pivotLows = ta.pivotlow(low, 5, 5)
+var float[] resistanceLevels = array.new_float(0)
+var float[] supportLevels = array.new_float(0)
+if not na(pivotHighs)
+    array.push(resistanceLevels, pivotHighs)
+    if array.size(resistanceLevels) > 10
+        array.shift(resistanceLevels)
+if not na(pivotLows)
+    array.push(supportLevels, pivotLows)
+    if array.size(supportLevels) > 10
+        array.shift(supportLevels)
+// Track most recent swing pivots (for structure-aware stop placement)
+var float lastPivotHigh = na
+var float lastPivotLow = na
+if not na(pivotHighs)
+    lastPivotHigh := pivotHighs
+if not na(pivotLows)
+    lastPivotLow := pivotLows
+nearSupport = false
+nearResistance = false
+if array.size(supportLevels) > 0
+    for i = 0 to array.size(supportLevels) - 1
+        level = array.get(supportLevels, i)
+        if math.abs(close - level) < atr * srTolerance
+            nearSupport := true
+            break
+if array.size(resistanceLevels) > 0
+    for i = 0 to array.size(resistanceLevels) - 1
+        level = array.get(resistanceLevels, i)
+        if math.abs(close - level) < atr * srTolerance
+            nearResistance := true
+            break
+// ==============================
+// 📊 MARKET STRUCTURE
+// ==============================
+// Use pivot-to-pivot structure (more realistic than comparing to oldest highest/lowest values).
+var float prevPivotHigh = na
+var float prevPivotLow = na
+var float lastPivotHigh2 = na
+var float lastPivotLow2 = na
+if not na(pivotHighs)
+    prevPivotHigh := lastPivotHigh2
+    lastPivotHigh2 := pivotHighs
+if not na(pivotLows)
+    prevPivotLow := lastPivotLow2
+    lastPivotLow2 := pivotLows
+haveHighs = not na(lastPivotHigh2) and not na(prevPivotHigh)
+haveLows = not na(lastPivotLow2) and not na(prevPivotLow)
+cleanBullStructure = haveHighs and haveLows and (lastPivotHigh2 > prevPivotHigh) and (lastPivotLow2 > prevPivotLow)
+cleanBearStructure = haveHighs and haveLows and (lastPivotHigh2 < prevPivotHigh) and (lastPivotLow2 < prevPivotLow)
+// ==============================
+// 📊 TREND STRENGTH CALCULATION
+// ==============================
+trendLookback = 50
+priceRange = ta.highest(high, trendLookback) - ta.lowest(low, trendLookback)
+priceMove = close - close[trendLookback]
+trendStrength = priceRange > 0 ? math.abs(priceMove) / priceRange : 0.0
+strongTrendDirection = trendStrength > minTrendStrength
+// ==============================
+// 🎯 10-POINT CONFLUENCE SCORING
+// ==============================
+var int confluenceLong = 0
+var int confluenceShort = 0
+confluenceLong := 0
+confluenceShort := 0
+// 1) HTF confirm (2 pts)
+if htf_bullish
+    confluenceLong += 2
+if htf_bearish
+    confluenceShort += 2
+// 2) ADX strong (1 pt)
+if strongTrend
+    confluenceLong += 1
+    confluenceShort += 1
+// 3) EMA aligned (1 pt)
+if ema_bullish_aligned
+    confluenceLong += 1
+if ema_bearish_aligned
+    confluenceShort += 1
+// 4) Hull direction (1 pt)
+if hull_bullish
+    confluenceLong += 1
+if hull_bearish
+    confluenceShort += 1
+// 5) MACD (1 pt)
+if macd_bullish
+    confluenceLong += 1
+if macd_bearish
+    confluenceShort += 1
+// 6) RSI neutral (1 pt)
+if rsi_neutral
+    confluenceLong += 1
+    confluenceShort += 1
+// 7) Near S/R (1 pt)
+if nearSupport
+    confluenceLong += 1
+if nearResistance
+    confluenceShort += 1
+// 8) Volume spike (1 pt)
+if volumeSpike
+    confluenceLong += 1
+    confluenceShort += 1
+// 9) Clean structure (1 pt)
+if cleanBullStructure
+    confluenceLong += 1
+if cleanBearStructure
+    confluenceShort += 1
+// 10) Trend strength (1 pt)
+if strongTrendDirection and close > close[trendLookback]
+    confluenceLong += 1
+if strongTrendDirection and close < close[trendLookback]
+    confluenceShort += 1
+// ==============================
+// 🛡️ COOPERATIVE STOPS + TPS
+// ==============================
+useCooperativeStops = input.bool(true, "Use Cooperative Stop System")
+initialStopATR = input.float(1.2, "Initial Stop (ATR)", minval=0.8, maxval=2.0)
+breakevenTriggerATR = input.float(1.5, "Breakeven Trigger (ATR)", minval=1.0, maxval=2.5)
+trailingActivateATR = input.float(3.0, "Trailing Activation (ATR)", minval=2.0, maxval=4.0)
+trailingDistanceATR = input.float(1.5, "Trailing Distance (ATR)", minval=1.0, maxval=2.5)
+tp1_ATR = input.float(2.5, "TP1 (ATR)", minval=1.5, maxval=3.5)
+tp1_Percent = input.int(70, "TP1 % of position", minval=50, maxval=80)
+tp2_ATR = input.float(4.0, "TP2 (ATR)", minval=3.0, maxval=5.0)
+tp2_Percent = input.int(25, "TP2 % of REMAINING (after TP1)", minval=15, maxval=35,
+     tooltip="This percent is applied to what remains after TP1 (better for small contract counts).")
+tp3_ATR = input.float(6.0, "TP3 (ATR)", minval=4.5, maxval=8.0)
+// Stop placement cooperation: ATR + structure, with distance guardrails
+stopStructureBufferATR = input.float(0.20, "Stop Buffer Beyond Swing (ATR)", minval=0.0, maxval=1.0,
+     tooltip="Adds a buffer beyond the last swing pivot for structure-anchored stops.")
+minStopDistanceATR = input.float(0.8, "Min Stop Distance (ATR)", minval=0.3, maxval=2.0,
+     tooltip="Prevents ultra-tight stops that conflict with volatility.")
+maxStopDistanceATR = input.float(2.5, "Max Stop Distance (ATR)", minval=1.0, maxval=5.0,
+     tooltip="Prevents overly-wide stops that reduce trade quality.")
+// ==============================
+// 📈 RISK + SIZING (VIRTUAL GUARDRAILS)
+// ==============================
+guardrailCapital = input.float(25000, "Guardrail Capital ($)", minval=5000, step=1000)
+maxDailyLossPercent = input.float(2.0, "Max Daily Loss % (virtual guardrail)", minval=1.0, maxval=3.0)
+maxDailyLossDollars = guardrailCapital * maxDailyLossPercent / 100.0
+fixedContracts = input.int(1, "Fixed Contracts", minval=1, maxval=50)
+// Institutional safety guards
+maxConsecutiveLosses = input.int(2, "Max Consecutive Losing Trades (kill-switch)", minval=1, maxval=10,
+     tooltip="Stops new entries after N losing trades until next session/day reset.")
+cooldownAfterLossBars = input.int(30, "Cooldown Bars After Loss", minval=0, maxval=500,
+     tooltip="Extra pause after a losing trade to avoid revenge trades.")
+cooldownAfterWinBars = input.int(0, "Cooldown Bars After Win", minval=0, maxval=500)
+maxHoldBars = input.int(0, "Max Hold Bars (0 = off)", minval=0, maxval=2000,
+     tooltip="Time-stop: exits at market when a position has been open this many bars.")
+exitOnReversal = input.bool(true, "Exit On Reversal Signal (institutional protection)")
+reversalRequiresHullFlip = input.bool(true, "Reversal Requires Hull Flip")
+reversalRequiresEma21Break = input.bool(true, "Reversal Requires EMA21 Break")
+// ==============================
+// 🔔 TRADERSPOST ALERT SETTINGS
+// ==============================
+enableStrategyOrders = input.bool(true, "Enable Strategy Orders (Backtest)")
+enableAlerts = input.bool(true, "Enable TradersPost Alerts (Live)")
+// Enforce a single execution mode to prevent conflicting exits.
+executionMode = input.string("SCALE_OUT", "Live Execution Mode", options=["BRACKET_ONLY", "SCALE_OUT"],
+     tooltip="BRACKET_ONLY sends ENTRY with stop+TP1 only. SCALE_OUT sends ENTRY plus TP/STOP exit alerts.")
+emitExitAlertsInput = input.bool(true, "Emit TP/STOP Exit Alerts (advanced)")
+includeBracketOnEntryInput = input.bool(true, "Include Stop + TP1 on Entry Alert (advanced)")
+emitExitAlerts = executionMode == "SCALE_OUT" ? emitExitAlertsInput : false
+includeBracketOnEntry = includeBracketOnEntryInput or (executionMode == "BRACKET_ONLY")
+traderspostTicker = input.string("MGC1!", "TradersPost Ticker", tooltip="Sent in JSON. Map in TradersPost to your broker symbol.")
+// Desync protection + idempotency
+enableHeartbeat = input.bool(false, "Send Heartbeat/SYNC Alerts")
+heartbeatEveryBars = input.int(12, "Heartbeat Every N Bars", minval=1, maxval=500,
+     tooltip="Heartbeat JSON helps diagnose missed webhooks/desync. Keep this modest to avoid spam.")
+// Emergency kill-switch (block entries, optionally flatten)
+killSwitch = input.bool(false, "EMERGENCY KILL SWITCH (no new entries)")
+flattenOnKill = input.bool(true, "Flatten On Kill Switch (send CLOSE alert)")
+// ==============================
+// 🧾 DAILY TRACKING (VIRTUAL)
+// ==============================
+var float dailyRealizedPnL = 0.0
+var int dailyTrades = 0
+var int lastTradeBar = 0
+var int consecutiveLosses = 0
+var int cooldownUntilBar = 0
+newDay = ta.change(time("D")) != 0
+if newDay
+    dailyRealizedPnL := 0.0
+    dailyTrades := 0
+    lastTradeBar := 0
+    consecutiveLosses := 0
+    cooldownUntilBar := 0
+maxLossReached = dailyRealizedPnL < -maxDailyLossDollars
+maxTradesReached = dailyTrades >= maxTradesPerDay
+// ==============================
+// 📊 VIRTUAL POSITION STATE
+// ==============================
+var bool inPos = false
+var bool isLong = false
+var float entryPrice = na
+var float currentStop = na
+var bool tp1_hit = false
+var bool tp2_hit = false
+var bool breakeven_active = false
+var bool trailing_active = false
+var float qtyRemaining = 0.0
+var float qtyOriginal = 0.0
+var int entryBar = na
+// MAE/MFE and per-trade realized PnL (virtual)
+var float maePoints = 0.0
+var float mfePoints = 0.0
+var float tradeRealizedPnL = 0.0
+var float lastTradeMAE = na
+var float lastTradeMFE = na
+var float lastTradePnL = na
+var string lastExitReason = ""
+var bool killSwitchPrev = false
+var float atrAtEntry = na
+barsSinceLastTrade = bar_index - lastTradeBar
+cooldownOK = bar_index >= cooldownUntilBar
+lossStreakOK = consecutiveLosses < maxConsecutiveLosses
+killOK = not killSwitch
+// Use strategy position as source of truth for position state
+inPos := strategy.position_size != 0
+isLong := strategy.position_size > 0
+qtyRemaining := inPos ? math.abs(strategy.position_size) : 0.0
+canTrade = sessionOK and timeWindowsOK and volatilityOK and killOK and not maxLossReached and not maxTradesReached and (not inPos) and (barsSinceLastTrade >= minBarsBetweenTrades) and cooldownOK and lossStreakOK
+// ==============================
+// 🤝 COOPERATIVE SIGNAL QUALITY GATES
+// ==============================
+atrValid = atr > 0
+entryCandidate = close
+atrStopLong = entryCandidate - (atr * initialStopATR)
+atrStopShort = entryCandidate + (atr * initialStopATR)
+structStopLong = na(lastPivotLow) ? na : (lastPivotLow - (atr * stopStructureBufferATR))
+structStopShort = na(lastPivotHigh) ? na : (lastPivotHigh + (atr * stopStructureBufferATR))
+// For long: lower stop is "further away" (safer). For short: higher stop is "further away".
+stopCandidateLong = na(structStopLong) ? atrStopLong : math.min(atrStopLong, structStopLong)
+stopCandidateShort = na(structStopShort) ? atrStopShort : math.max(atrStopShort, structStopShort)
+stopDistATRLong = atrValid ? math.abs(entryCandidate - stopCandidateLong) / atr : na
+stopDistATRShort = atrValid ? math.abs(entryCandidate - stopCandidateShort) / atr : na
+stopOKLong = atrValid and not na(stopDistATRLong) and stopDistATRLong >= minStopDistanceATR and stopDistATRLong <= maxStopDistanceATR
+stopOKShort = atrValid and not na(stopDistATRShort) and stopDistATRShort >= minStopDistanceATR and stopDistATRShort <= maxStopDistanceATR
+// Prevent mixed-direction "both good" situations; require directional dominance.
+bothDirectionsHot = confluenceLong >= minConfluenceScore and confluenceShort >= minConfluenceScore
+dominantLong = confluenceLong >= (confluenceShort + scoreDominance)
+dominantShort = confluenceShort >= (confluenceLong + scoreDominance)
+srOKLong = not avoidOpposingSR or not nearResistance
+srOKShort = not avoidOpposingSR or not nearSupport
+htfOKLong = not requireHtfAlignment or htf_bullish
+htfOKShort = not requireHtfAlignment or htf_bearish
+mtfOKLong = (not useMtfConfirmation) or mtf_bullish
+mtfOKShort = (not useMtfConfirmation) or mtf_bearish
+longSignal = canTrade and stopOKLong and srOKLong and htfOKLong and mtfOKLong and (not bothDirectionsHot) and dominantLong and confluenceLong >= minConfluenceScore
+shortSignal = canTrade and stopOKShort and srOKShort and htfOKShort and mtfOKShort and (not bothDirectionsHot) and dominantShort and confluenceShort >= minConfluenceScore
+// ==============================
+// 🔧 JSON HELPERS
+// ==============================
+f_json_num(x) => str.tostring(x, "#.####")
+f_signal_id(_kind, _side, _reason) =>
+    // Uniqueness for idempotency: time + bar_index + kind/side/reason
+    _kind + "-" + _side + "-" + _reason + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
+f_json_entry(_isLong, _qty, _stopPrice, _tp1Price, _score) =>
+    action = _isLong ? "buy" : "sell"
+    side = _isLong ? "LONG" : "SHORT"
+    sid = f_signal_id("ENTRY", side, "ENTRY")
+    base = '{"ticker":"' + traderspostTicker + '","action":"' + action + '","orderType":"market","quantity":' + str.tostring(_qty) + ',"confluenceScore":' + str.tostring(_score) + ',"signalId":"' + sid + '"'
+    br = includeBracketOnEntry ? ',"stopLoss":{"stopPrice":' + f_json_num(_stopPrice) + '},"takeProfit":{"limitPrice":' + f_json_num(_tp1Price) + '}' : ""
+    base + br + '}'
+f_json_exit(_isLong, _qty, _reason, _refPrice) =>
+    action = _isLong ? "sell" : "buy"
+    side = _isLong ? "LONG" : "SHORT"
+    sid = f_signal_id("EXIT", side, _reason)
+    '{"ticker":"' + traderspostTicker + '","action":"' + action + '","orderType":"market","quantity":' + f_json_num(_qty) + ',"reduceOnly":true,"reason":"' + _reason + '","referencePrice":' + f_json_num(_refPrice) + ',"signalId":"' + sid + '"}'
+f_json_heartbeat() =>
+    // Diagnostic heartbeat (does not trade by itself unless your router interprets it)
+    posSide = inPos ? (isLong ? "LONG" : "SHORT") : "FLAT"
+    '{"ticker":"' + traderspostTicker + '","signal":"HEARTBEAT","positionModel":"' + posSide + '","qtyRemaining":' + f_json_num(qtyRemaining) + ',"cooldownActive":' + (bar_index < cooldownUntilBar ? "true" : "false") + ',"consecutiveLosses":' + str.tostring(consecutiveLosses) + ',"maxConsecutiveLosses":' + str.tostring(maxConsecutiveLosses) + ',"killSwitch":' + (killSwitch ? "true" : "false") + ',"time":' + str.tostring(time) + ',"barIndex":' + str.tostring(bar_index) + '}'
+// ==============================
+// 📍 ENTRY (ALERT + MODEL STATE)
+// ==============================
+// Kill-switch edge detection: optionally flatten immediately (one-shot per toggle)
+killTriggered = killSwitch and not killSwitchPrev
+killSwitchPrev := killSwitch
+if barstate.isconfirmed and killTriggered and flattenOnKill and inPos and qtyRemaining > 0
+    alert(f_json_exit(isLong, qtyRemaining, "KILL_SWITCH", close), alert.freq_once_per_bar_close)
+    if enableStrategyOrders
+        strategy.close_all(comment="KILL_SWITCH")
+    // Treat as an exit for cooldown/loss tracking (virtual)
+    pnlPoints = (close - entryPrice) * (isLong ? 1 : -1)
+    pnlDollars = pnlPoints * syminfo.pointvalue * qtyRemaining
+    dailyRealizedPnL += pnlDollars
+    tradeRealizedPnL += pnlDollars
+    lastTradePnL := tradeRealizedPnL
+    lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
+    lastTradeMFE := mfePoints * syminfo.pointvalue * qtyOriginal
+    lastExitReason := "KILL_SWITCH"
+    consecutiveLosses := tradeRealizedPnL < 0 ? (consecutiveLosses + 1) : 0
+    cooldownUntilBar := bar_index + (tradeRealizedPnL < 0 ? cooldownAfterLossBars : cooldownAfterWinBars)
+    lastTradeBar := bar_index
+    inPos := false
+    entryPrice := na
+    currentStop := na
+    tp1_hit := false
+    tp2_hit := false
+    breakeven_active := false
+    trailing_active := false
+    qtyRemaining := 0.0
+    qtyOriginal := 0.0
+    entryBar := na
+    maePoints := 0.0
+    mfePoints := 0.0
+    tradeRealizedPnL := 0.0
+if barstate.isconfirmed
+    // Strategy entries (backtest)
+    if enableStrategyOrders and longSignal and fixedContracts > 0
+        strategy.entry("Long", strategy.long, qty=fixedContracts, comment="Long score " + str.tostring(confluenceLong))
+    if enableStrategyOrders and shortSignal and fixedContracts > 0
+        strategy.entry("Short", strategy.short, qty=fixedContracts, comment="Short score " + str.tostring(confluenceShort))
+    // Live alerts for entries (webhook)
+    if enableAlerts
+        if longSignal and fixedContracts > 0
+            modeledEntry = close
+            modeledStop = stopCandidateLong
+            modeledTp1 = modeledEntry + (atr * tp1_ATR)
+            alert(f_json_entry(true, fixedContracts, modeledStop, modeledTp1, confluenceLong), alert.freq_once_per_bar_close)
+        if shortSignal and fixedContracts > 0
+            modeledEntry = close
+            modeledStop = stopCandidateShort
+            modeledTp1 = modeledEntry - (atr * tp1_ATR)
+            alert(f_json_entry(false, fixedContracts, modeledStop, modeledTp1, confluenceShort), alert.freq_once_per_bar_close)
+// Sync internal state to actual strategy position (entry/flat)
+posOpened = strategy.position_size != 0 and strategy.position_size[1] == 0
+posClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
+if posOpened
+    entryPrice := strategy.position_avg_price
+    atrAtEntry := atr
+    qtyOriginal := math.abs(strategy.position_size)
+    qtyRemaining := qtyOriginal
+    entryBar := bar_index
+    maePoints := 0.0
+    mfePoints := 0.0
+    tradeRealizedPnL := 0.0
+    tp1_hit := false
+    tp2_hit := false
+    breakeven_active := false
+    trailing_active := false
+    // Initial cooperative stop from entry price
+    atrStop = (strategy.position_size > 0) ? (entryPrice - (atrAtEntry * initialStopATR)) : (entryPrice + (atrAtEntry * initialStopATR))
+    structStop = (strategy.position_size > 0) ? (na(lastPivotLow) ? na : (lastPivotLow - (atrAtEntry * stopStructureBufferATR))) : (na(lastPivotHigh) ? na : (lastPivotHigh + (atrAtEntry * stopStructureBufferATR)))
+    currentStop := na(structStop) ? atrStop : ((strategy.position_size > 0) ? math.min(atrStop, structStop) : math.max(atrStop, structStop))
+    dailyTrades += 1
+if posClosed
+    // enforce spacing from the exit
+    lastTradeBar := bar_index
+    entryPrice := na
+    atrAtEntry := na
+    currentStop := na
+    qtyOriginal := 0.0
+    qtyRemaining := 0.0
+    entryBar := na
+    tp1_hit := false
+    tp2_hit := false
+    breakeven_active := false
+    trailing_active := false
+// ==============================
+// 🫀 HEARTBEAT / SYNC (OPTIONAL)
+// ==============================
+if enableAlerts and barstate.isconfirmed and enableHeartbeat
+    if (bar_index % heartbeatEveryBars) == 0
+        alert(f_json_heartbeat(), alert.freq_once_per_bar_close)
+// ==============================
+// 📉 MAE/MFE TRACKING (INSTITUTIONAL METRICS)
+// ==============================
+if inPos and not na(entryPrice)
+    // MAE: worst adverse move vs entry (negative points)
+    // MFE: best favorable move vs entry (positive points)
+    adverse = isLong ? (low - entryPrice) : (entryPrice - high)
+    favorable = isLong ? (high - entryPrice) : (entryPrice - low)
+    maePoints := math.min(maePoints, adverse)
+    mfePoints := math.max(mfePoints, favorable)
+// ==============================
+// 🛡️ COOPERATIVE STOP MANAGEMENT (MODEL)
+// ==============================
+if useCooperativeStops and inPos and not na(entryPrice)
+    currentProfit = isLong ? (close - entryPrice) : (entryPrice - close)
+    if not breakeven_active and currentProfit >= atr * breakevenTriggerATR
+        breakeven_active := true
+        beStop = isLong ? (entryPrice + (2 * syminfo.mintick)) : (entryPrice - (2 * syminfo.mintick))
+        currentStop := isLong ? math.max(currentStop, beStop) : math.min(currentStop, beStop)
+    if not trailing_active and currentProfit >= atr * trailingActivateATR
+        trailing_active := true
+    if trailing_active
+        trailStop = isLong ? (close - (atr * trailingDistanceATR)) : (close + (atr * trailingDistanceATR))
+        currentStop := isLong ? math.max(currentStop, trailStop) : math.min(currentStop, trailStop)
+// ==============================
+// 🎯 EXITS (TP1/TP2/TP3 + STOP) — ALERT ONLY
+// ==============================
+// Use entry ATR for fixed targets (more stable)
+tp1_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp1_ATR) : entryPrice - (atrAtEntry * tp1_ATR)) : na
+tp2_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp2_ATR) : entryPrice - (atrAtEntry * tp2_ATR)) : na
+tp3_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp3_ATR) : entryPrice - (atrAtEntry * tp3_ATR)) : na
+// Strategy exits (backtest)
+if enableStrategyOrders and inPos and not na(entryPrice) and barstate.isconfirmed
+    // Convert TP2 percent-of-remaining into absolute percent of original position.
+    tp1_abs = tp1_Percent
+    tp2_abs = (100 - tp1_Percent) * (tp2_Percent / 100.0)
+    tp3_abs = 100.0 - tp1_abs - tp2_abs
+    if executionMode == "BRACKET_ONLY"
+        if isLong
+            strategy.exit("Bracket_Long", "Long", limit=tp1_price, stop=currentStop, comment="Bracket")
+        else
+            strategy.exit("Bracket_Short", "Short", limit=tp1_price, stop=currentStop, comment="Bracket")
+    else
+        if isLong
+            strategy.exit("TP1_Long", "Long", qty_percent=tp1_abs, limit=tp1_price, stop=currentStop, comment="TP1")
+            strategy.exit("TP2_Long", "Long", qty_percent=tp2_abs, limit=tp2_price, stop=currentStop, comment="TP2")
+            strategy.exit("TP3_Long", "Long", qty_percent=tp3_abs, limit=tp3_price, stop=currentStop, comment="TP3")
+        else
+            strategy.exit("TP1_Short", "Short", qty_percent=tp1_abs, limit=tp1_price, stop=currentStop, comment="TP1")
+            strategy.exit("TP2_Short", "Short", qty_percent=tp2_abs, limit=tp2_price, stop=currentStop, comment="TP2")
+            strategy.exit("TP3_Short", "Short", qty_percent=tp3_abs, limit=tp3_price, stop=currentStop, comment="TP3")
+// Live exit alerts (webhook)
+if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemaining > 0 and barstate.isconfirmed
+    tp1Touched = isLong ? (high >= tp1_price) : (low <= tp1_price)
+    tp2Touched = isLong ? (high >= tp2_price) : (low <= tp2_price)
+    tp3Touched = isLong ? (high >= tp3_price) : (low <= tp3_price)
+    stopTouched = isLong ? (low <= currentStop) : (high >= currentStop)
+    // Reversal protection (close position at market on strong opposite regime)
+    oppDominant = isLong ?
+         (confluenceShort >= minConfluenceScore and confluenceShort >= (confluenceLong + scoreDominance) and (not requireHtfAlignment or htf_bearish) and ((not useMtfConfirmation) or mtf_bearish)) :
+         (confluenceLong >= minConfluenceScore and confluenceLong >= (confluenceShort + scoreDominance) and (not requireHtfAlignment or htf_bullish) and ((not useMtfConfirmation) or mtf_bullish))
+    hullFlipOK = not reversalRequiresHullFlip or (isLong ? hull_bearish : hull_bullish)
+    ema21BreakOK = not reversalRequiresEma21Break or (isLong ? close < ema21 : close > ema21)
+    reversalTouched = exitOnReversal and oppDominant and hullFlipOK and ema21BreakOK
+    // Time-stop (optional)
+    holdBars = not na(entryBar) ? (bar_index - entryBar) : 0
+    timeStopTouched = (maxHoldBars > 0) and (holdBars >= maxHoldBars)
+    // Priority: STOP first (conservative for same-bar TP/STOP conflicts)
+    if stopTouched
+        alert(f_json_exit(isLong, qtyRemaining, "STOP", currentStop), alert.freq_once_per_bar_close)
+        // virtual realized PnL
+        pnlPoints = (currentStop - entryPrice) * (isLong ? 1 : -1)
+        pnlDollars = pnlPoints * syminfo.pointvalue * qtyRemaining
+        dailyRealizedPnL += pnlDollars
+        tradeRealizedPnL += pnlDollars
+        // finalize trade stats / risk state
+        lastTradePnL := tradeRealizedPnL
+        lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
+        lastTradeMFE := mfePoints * syminfo.pointvalue * qtyOriginal
+        lastExitReason := "STOP"
+        consecutiveLosses := tradeRealizedPnL < 0 ? (consecutiveLosses + 1) : 0
+        cooldownUntilBar := bar_index + (tradeRealizedPnL < 0 ? cooldownAfterLossBars : cooldownAfterWinBars)
+        lastTradeBar := bar_index
+        // reset model
+        inPos := false
+        entryPrice := na
+        currentStop := na
+        tp1_hit := false
+        tp2_hit := false
+        breakeven_active := false
+        trailing_active := false
+        qtyRemaining := 0.0
+        qtyOriginal := 0.0
+        entryBar := na
+        maePoints := 0.0
+        mfePoints := 0.0
+        tradeRealizedPnL := 0.0
+    else
+        // Reversal / time-stop exits (market)
+        if reversalTouched or timeStopTouched
+            reason = reversalTouched ? "REVERSAL" : "TIME"
+            alert(f_json_exit(isLong, qtyRemaining, reason, close), alert.freq_once_per_bar_close)
+            pnlPoints = (close - entryPrice) * (isLong ? 1 : -1)
+            pnlDollars = pnlPoints * syminfo.pointvalue * qtyRemaining
+            dailyRealizedPnL += pnlDollars
+            tradeRealizedPnL += pnlDollars
+            lastTradePnL := tradeRealizedPnL
+            lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
+            lastTradeMFE := mfePoints * syminfo.pointvalue * qtyOriginal
+            lastExitReason := reason
+            consecutiveLosses := tradeRealizedPnL < 0 ? (consecutiveLosses + 1) : 0
+            cooldownUntilBar := bar_index + (tradeRealizedPnL < 0 ? cooldownAfterLossBars : cooldownAfterWinBars)
+            lastTradeBar := bar_index
+            inPos := false
+            entryPrice := na
+            currentStop := na
+            tp1_hit := false
+            tp2_hit := false
+            breakeven_active := false
+            trailing_active := false
+            qtyRemaining := 0.0
+            qtyOriginal := 0.0
+            entryBar := na
+            maePoints := 0.0
+            mfePoints := 0.0
+            tradeRealizedPnL := 0.0
+        else
+            // Determine the highest TP stage reached this bar
+            stage = tp3Touched ? 3 : tp2Touched ? 2 : tp1Touched ? 1 : 0
+            // Contract allocation:
+            // - TP1 is % of ORIGINAL
+            // - TP2 is % of REMAINING after TP1 (works better for small contract counts)
+            tp1_qty_target = math.round(qtyOriginal * (tp1_Percent / 100.0))
+            tp1_qty_target := math.min(tp1_qty_target, qtyOriginal)
+            remaining_after_tp1 = math.max(qtyOriginal - tp1_qty_target, 0)
+            tp2_qty_target = math.round(remaining_after_tp1 * (tp2_Percent / 100.0))
+            tp2_qty_target := math.min(tp2_qty_target, remaining_after_tp1)
+            tp3_qty_target = math.max(qtyOriginal - tp1_qty_target - tp2_qty_target, 0)
+            // Fire the missing exits needed to "catch up" to the stage.
+            if stage >= 1 and not tp1_hit and tp1_qty_target > 0 and qtyRemaining > 0
+                qtyOut = math.min(tp1_qty_target, qtyRemaining)
+                alert(f_json_exit(isLong, qtyOut, "TP1", tp1_price), alert.freq_once_per_bar_close)
+                pnlPoints = (tp1_price - entryPrice) * (isLong ? 1 : -1)
+                pnlDollars = pnlPoints * syminfo.pointvalue * qtyOut
+                dailyRealizedPnL += pnlDollars
+                tradeRealizedPnL += pnlDollars
+                qtyRemaining -= qtyOut
+                tp1_hit := true
+            if stage >= 2 and tp1_hit and not tp2_hit and tp2_qty_target > 0 and qtyRemaining > 0
+                qtyOut = math.min(tp2_qty_target, qtyRemaining)
+                alert(f_json_exit(isLong, qtyOut, "TP2", tp2_price), alert.freq_once_per_bar_close)
+                pnlPoints = (tp2_price - entryPrice) * (isLong ? 1 : -1)
+                pnlDollars = pnlPoints * syminfo.pointvalue * qtyOut
+                dailyRealizedPnL += pnlDollars
+                tradeRealizedPnL += pnlDollars
+                qtyRemaining -= qtyOut
+                tp2_hit := true
+            if stage >= 3 and tp2_hit and qtyRemaining > 0
+                alert(f_json_exit(isLong, qtyRemaining, "TP3", tp3_price), alert.freq_once_per_bar_close)
+                pnlPoints = (tp3_price - entryPrice) * (isLong ? 1 : -1)
+                pnlDollars = pnlPoints * syminfo.pointvalue * qtyRemaining
+                dailyRealizedPnL += pnlDollars
+                tradeRealizedPnL += pnlDollars
+                lastTradePnL := tradeRealizedPnL
+                lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
+                lastTradeMFE := mfePoints * syminfo.pointvalue * qtyOriginal
+                lastExitReason := "TP3"
+                consecutiveLosses := tradeRealizedPnL < 0 ? (consecutiveLosses + 1) : 0
+                cooldownUntilBar := bar_index + (tradeRealizedPnL < 0 ? cooldownAfterLossBars : cooldownAfterWinBars)
+                lastTradeBar := bar_index
+                // reset model
+                inPos := false
+                entryPrice := na
+                currentStop := na
+                tp1_hit := false
+                tp2_hit := false
+                breakeven_active := false
+                trailing_active := false
+                qtyRemaining := 0.0
+                qtyOriginal := 0.0
+                entryBar := na
+                maePoints := 0.0
+                mfePoints := 0.0
+                tradeRealizedPnL := 0.0
+            // safety reset if fully scaled out
+            if inPos and qtyRemaining <= 0
+                lastTradePnL := tradeRealizedPnL
+                lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
+                lastTradeMFE := mfePoints * syminfo.pointvalue * qtyOriginal
+                lastExitReason := "SCALED_OUT"
+                consecutiveLosses := tradeRealizedPnL < 0 ? (consecutiveLosses + 1) : 0
+                cooldownUntilBar := bar_index + (tradeRealizedPnL < 0 ? cooldownAfterLossBars : cooldownAfterWinBars)
+                lastTradeBar := bar_index
+                inPos := false
+                entryPrice := na
+                currentStop := na
+                tp1_hit := false
+                tp2_hit := false
+                breakeven_active := false
+                trailing_active := false
+                qtyRemaining := 0.0
+                qtyOriginal := 0.0
+                entryBar := na
+                maePoints := 0.0
+                mfePoints := 0.0
+                tradeRealizedPnL := 0.0
+// ==============================
+// 📊 DISPLAYS
+// ==============================
+var table perfTable = table.new(position.top_right, 2, 13, bgcolor=color.new(color.black, 85))
+if barstate.isfirst
+    // Pine tables don't support `colspan` in table.cell(); use merge instead.
+    table.merge_cells(perfTable, 0, 0, 1, 0)
+if barstate.isconfirmed
+    table.cell(perfTable, 0, 0, "MGC ALERT-ONLY", bgcolor=color.new(color.gold, 60), text_color=color.white)
+    table.cell(perfTable, 0, 1, "Daily Trades", text_color=color.white)
+    table.cell(perfTable, 1, 1, str.tostring(dailyTrades) + "/" + str.tostring(maxTradesPerDay), text_color=maxTradesReached ? color.orange : color.lime)
+    table.cell(perfTable, 0, 2, "Daily P&L (virtual)", text_color=color.white)
+    table.cell(perfTable, 1, 2, "$" + str.tostring(dailyRealizedPnL, "#.##"), text_color=dailyRealizedPnL >= 0 ? color.lime : color.red)
+    table.cell(perfTable, 0, 3, "Confluence", text_color=color.white)
+    table.cell(perfTable, 1, 3, str.tostring(math.max(confluenceLong, confluenceShort)) + "/10", text_color=color.white)
+    table.cell(perfTable, 0, 4, "ADX", text_color=color.white)
+    table.cell(perfTable, 1, 4, str.tostring(adx, "#.#"), text_color=adx >= adxThreshold ? color.lime : color.gray)
+    table.cell(perfTable, 0, 5, "Session", text_color=color.white)
+    table.cell(perfTable, 1, 5, sessionOK ? "OK" : "OFF", text_color=sessionOK ? color.lime : color.red)
+    table.cell(perfTable, 0, 6, "Position", text_color=color.white)
+    table.cell(perfTable, 1, 6, inPos ? (isLong ? "LONG" : "SHORT") : "FLAT", text_color=inPos ? color.yellow : color.gray)
+    table.cell(perfTable, 0, 7, "Stop Mode", text_color=color.white)
+    table.cell(perfTable, 1, 7, inPos ? (breakeven_active ? "BE" : trailing_active ? "TRAIL" : "INIT") : "-", text_color=color.aqua)
+    table.cell(perfTable, 0, 8, "Qty Rem", text_color=color.white)
+    table.cell(perfTable, 1, 8, inPos ? str.tostring(qtyRemaining) : "0", text_color=color.white)
+    table.cell(perfTable, 0, 9, "Loss Streak", text_color=color.white)
+    table.cell(perfTable, 1, 9, str.tostring(consecutiveLosses) + "/" + str.tostring(maxConsecutiveLosses), text_color=consecutiveLosses >= maxConsecutiveLosses ? color.red : color.lime)
+    table.cell(perfTable, 0, 10, "Cooldown", text_color=color.white)
+    cdText = bar_index < cooldownUntilBar ? "ON" : "OFF"
+    table.cell(perfTable, 1, 10, cdText, text_color=bar_index < cooldownUntilBar ? color.orange : color.lime)
+    table.cell(perfTable, 0, 11, "Last Exit", text_color=color.white)
+    table.cell(perfTable, 1, 11, lastExitReason, text_color=color.white)
+    table.cell(perfTable, 0, 12, "Last PnL (virt)", text_color=color.white)
+    table.cell(perfTable, 1, 12, na(lastTradePnL) ? "-" : ("$" + str.tostring(lastTradePnL, "#.##")), text_color=na(lastTradePnL) ? color.gray : (lastTradePnL >= 0 ? color.lime : color.red))
+// ==============================
+// 📈 VISUAL PLOTS
+// ==============================
+plot(ema9, "EMA 9", color=color.new(color.red, 50), linewidth=1)
+plot(ema21, "EMA 21", color=color.new(color.orange, 50), linewidth=1)
+plot(ema50, "EMA 50", color=color.new(color.blue, 50), linewidth=2)
+plot(ema200, "EMA 200", color=color.new(color.purple, 50), linewidth=2)
+plot(hull, "Hull MA", color=hull_bullish ? color.green : hull_bearish ? color.red : color.gray, linewidth=3)
+plot(inPos ? currentStop : na, "Stop (model)", color=breakeven_active ? color.yellow : trailing_active ? color.aqua : color.red, linewidth=2, style=plot.style_cross)
+plotshape(longSignal, "Long Signal", shape.triangleup, location.belowbar, color=color.green, size=size.tiny, text="L " + str.tostring(confluenceLong))
+plotshape(shortSignal, "Short Signal", shape.triangledown, location.abovebar, color=color.red, size=size.tiny, text="S " + str.tostring(confluenceShort))
+bgcolor(not sessionOK ? color.new(color.red, 92) : na)
+bgcolor(maxLossReached ? color.new(color.red, 88) : na)
+bgcolor(maxTradesReached ? color.new(color.orange, 92) : na)
