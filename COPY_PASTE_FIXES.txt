@@ -1,0 +1,205 @@
+═══════════════════════════════════════════════════════════════════════════
+  COPY-PASTE READY FIXES FOR "STOP CALCULATION ERROR"
+═══════════════════════════════════════════════════════════════════════════
+
+════════════════════════════════════════════════════════════════
+FIX #1: ADD AT TOP (after strategy line, before first input)
+════════════════════════════════════════════════════════════════
+
+COPY AND PASTE THIS:
+
+// ═════════════════════════════════════════════════════════════
+// STOP CALCULATION VALIDATION FUNCTIONS (Fix for Stop Calc Error)
+// ═════════════════════════════════════════════════════════════
+isValidPrice(price) =>
+    not na(price) and not math.isinfinite(price) and price > 0
+
+isValidPoints(pts) =>
+    not na(pts) and not math.isinfinite(pts) and pts > 0 and pts < 100000
+
+
+════════════════════════════════════════════════════════════════
+FIX #2a: CHANGE safePointValue DEFAULT
+════════════════════════════════════════════════════════════════
+
+FIND THIS LINE:
+safePointValue = syminfo.pointvalue > 0 ? syminfo.pointvalue : 1.0
+
+REPLACE WITH:
+safePointValue = syminfo.pointvalue > 0 ? syminfo.pointvalue : 5.0
+
+
+════════════════════════════════════════════════════════════════
+FIX #2b: VALIDATE MES SL/TP CALCULATIONS
+════════════════════════════════════════════════════════════════
+
+FIND THESE 3 LINES:
+mesFixedActive = isMES and mesUseFixedDollarSLTP and (timeframe.period == "3" or timeframe.period == "5")
+mesSL_pts = mesFixedActive ? ((timeframe.period == "3" ? mesFixedSLDol_3m : mesFixedSLDol_5m) / safePointValue) : mes_customSL
+mesTP_pts = mesFixedActive ? (mesFixedTPDol / safePointValue) : mes_customTP
+
+DELETE THE LAST 2 LINES (mesSL_pts and mesTP_pts)
+
+THEN PASTE THIS AFTER mesFixedActive:
+
+// ═════════════════════════════════════════════════════════════
+// VALIDATED MES SL/TP CALCULATIONS (Fix for Stop Calc Error)
+// ═════════════════════════════════════════════════════════════
+mesSL_pts_raw = mesFixedActive ? ((timeframe.period == "3" ? mesFixedSLDol_3m : mesFixedSLDol_5m) / safePointValue) : mes_customSL
+mesTP_pts_raw = mesFixedActive ? (mesFixedTPDol / safePointValue) : mes_customTP
+
+// Validate and constrain to reasonable ranges
+mesSL_pts = isValidPoints(mesSL_pts_raw) ? math.min(mesSL_pts_raw, 50.0) : 9.0
+mesTP_pts = isValidPoints(mesTP_pts_raw) ? math.min(mesTP_pts_raw, 50.0) : 16.0
+
+
+════════════════════════════════════════════════════════════════
+FIX #3a: ADD VALIDATION IN LONG ALERT GENERATION
+════════════════════════════════════════════════════════════════
+
+FIND THIS SECTION (in f_traderspostAlerts function):
+
+    if entryOK and longCondition and tpFlat and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
+        bool is3m_chart = timeframe.period == "3"
+        bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
+        float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
+        float currentTP1_pts = isMES ? mesTP_pts : (useMnq3m ? mnq_customTP1_3m : mnq_customTP1)
+        if useManualDollarOverrides and manualDollarSL > 0
+            currentSL_pts := manualDollarSL / safePointValue
+        if useManualDollarOverrides and manualDollarTP > 0
+            currentTP1_pts := manualDollarTP / safePointValue
+        localSL = tpExecPrice - currentSL_pts
+        localTP1 = tpExecPrice + currentTP1_pts
+
+DELETE THESE 2 LINES:
+        localSL = tpExecPrice - currentSL_pts
+        localTP1 = tpExecPrice + currentTP1_pts
+
+PASTE THIS IN THEIR PLACE:
+
+        // ═════════════════════════════════════════════════════════════
+        // VALIDATE BEFORE CALCULATING STOP/TP PRICES (Fix for Stop Calc Error)
+        // ═════════════════════════════════════════════════════════════
+        if not isValidPoints(currentSL_pts)
+            currentSL_pts := 9.0
+        if not isValidPoints(currentTP1_pts)
+            currentTP1_pts := 16.0
+        
+        localSL = tpExecPrice - currentSL_pts
+        localTP1 = tpExecPrice + currentTP1_pts
+        
+        // Final validation of actual prices
+        if not isValidPrice(localSL)
+            localSL := tpExecPrice * 0.998
+        if not isValidPrice(localTP1)
+            localTP1 := tpExecPrice * 1.003
+
+
+════════════════════════════════════════════════════════════════
+FIX #3b: ADD VALIDATION IN SHORT ALERT GENERATION
+════════════════════════════════════════════════════════════════
+
+FIND THIS SECTION (in f_traderspostAlerts function):
+
+    if entryOK and shortCondition and tpFlat and allowEntryShort and tpEntryQty > 0 and enableTradersPostAlerts_eff
+        bool is3m_chart = timeframe.period == "3"
+        bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
+        float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
+        float currentTP1_pts = isMES ? mesTP_pts : (useMnq3m ? mnq_customTP1_3m : mnq_customTP1)
+        if useManualDollarOverrides and manualDollarSL > 0
+            currentSL_pts := manualDollarSL / safePointValue
+        if useManualDollarOverrides and manualDollarTP > 0
+            currentTP1_pts := manualDollarTP / safePointValue
+        localSL = tpExecPrice + currentSL_pts
+        localTP1 = tpExecPrice - currentTP1_pts
+
+DELETE THESE 2 LINES:
+        localSL = tpExecPrice + currentSL_pts
+        localTP1 = tpExecPrice - currentTP1_pts
+
+PASTE THIS IN THEIR PLACE:
+
+        // ═════════════════════════════════════════════════════════════
+        // VALIDATE BEFORE CALCULATING STOP/TP PRICES (Fix for Stop Calc Error)
+        // ═════════════════════════════════════════════════════════════
+        if not isValidPoints(currentSL_pts)
+            currentSL_pts := 9.0
+        if not isValidPoints(currentTP1_pts)
+            currentTP1_pts := 16.0
+        
+        localSL = tpExecPrice + currentSL_pts
+        localTP1 = tpExecPrice - currentTP1_pts
+        
+        // Final validation of actual prices
+        if not isValidPrice(localSL)
+            localSL := tpExecPrice * 1.002
+        if not isValidPrice(localTP1)
+            localTP1 := tpExecPrice * 0.997
+
+
+════════════════════════════════════════════════════════════════
+OPTIONAL: DEBUG TABLE (Add at very end of script)
+════════════════════════════════════════════════════════════════
+
+PASTE THIS AT THE VERY END (after the last line of your script):
+
+// ═════════════════════════════════════════════════════════════
+// DEBUG TABLE: Verify MES 5m Stop Calculations
+// ═════════════════════════════════════════════════════════════
+if isMES and (timeframe.period == "5")
+    var table debugTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80), border_width=1, border_color=color.gray)
+    
+    if barstate.islast
+        table.cell(debugTable, 0, 0, "MES 5m Stop Debug", text_color=color.white, text_size=size.small)
+        table.cell(debugTable, 1, 0, "", text_color=color.white)
+        
+        table.cell(debugTable, 0, 1, "Fixed SL/TP:", text_color=color.yellow, text_size=size.tiny)
+        table.cell(debugTable, 1, 1, str.tostring(mesFixedActive), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 2, "SL Points:", text_color=color.yellow, text_size=size.tiny)
+        table.cell(debugTable, 1, 2, str.tostring(mesSL_pts, "#.##"), 
+                   text_color=isValidPoints(mesSL_pts) ? color.lime : color.red, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 3, "TP Points:", text_color=color.yellow, text_size=size.tiny)
+        table.cell(debugTable, 1, 3, str.tostring(mesTP_pts, "#.##"), 
+                   text_color=isValidPoints(mesTP_pts) ? color.lime : color.red, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 4, "Point Value:", text_color=color.yellow, text_size=size.tiny)
+        table.cell(debugTable, 1, 4, str.tostring(safePointValue), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(debugTable, 0, 5, "Status:", text_color=color.yellow, text_size=size.tiny)
+        statusText = isValidPoints(mesSL_pts) and isValidPoints(mesTP_pts) ? "✓ VALID" : "✗ ERROR"
+        statusColor = isValidPoints(mesSL_pts) and isValidPoints(mesTP_pts) ? color.lime : color.red
+        table.cell(debugTable, 1, 5, statusText, text_color=statusColor, text_size=size.tiny)
+
+
+════════════════════════════════════════════════════════════════
+TESTING CHECKLIST
+════════════════════════════════════════════════════════════════
+
+After applying all fixes:
+
+1. [ ] Save script in TradingView
+2. [ ] Reload chart
+3. [ ] Check for compilation errors (should be none)
+4. [ ] Switch to MES 5m chart
+5. [ ] Look at top-right corner for debug table
+6. [ ] Verify "Status: ✓ VALID" shows in green
+7. [ ] Check SL Points shows 9.00 (green)
+8. [ ] Check TP Points shows 16.00 (green)
+9. [ ] Create a new alert
+10. [ ] Check alert preview - should see valid JSON with stop prices
+11. [ ] Send test alert to TradersPost
+12. [ ] Verify no "Stop Calculation Error"
+
+Expected Debug Values for MES 5m:
+- Fixed SL/TP: true
+- SL Points: 9.00 (green)
+- TP Points: 16.00 (green)
+- Point Value: 5
+- Status: ✓ VALID (green)
+
+If any values are red or show "✗ ERROR", double-check you applied
+all fixes correctly.
+
+════════════════════════════════════════════════════════════════

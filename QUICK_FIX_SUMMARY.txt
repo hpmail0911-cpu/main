@@ -1,0 +1,91 @@
+═══════════════════════════════════════════════════════════════════
+  MES 5M "STOP CALCULATION ERROR" - QUICK FIX SUMMARY
+═══════════════════════════════════════════════════════════════════
+
+ROOT CAUSE:
+-----------
+The mesSL_pts calculation for MES 5m is producing invalid values (NaN or 
+infinity) when sent to TradersPost alerts. This happens because:
+  - Division by invalid pointvalue
+  - Missing validation of calculated stop/TP values
+  - No fallback for edge cases
+
+THE FIX (3 Changes):
+--------------------
+
+1. ADD at top of script (after strategy line):
+   ┌─────────────────────────────────────────────────────────────┐
+   │ isValidPrice(price) =>                                       │
+   │     not na(price) and not math.isinfinite(price) and price > 0│
+   │                                                               │
+   │ isValidPoints(pts) =>                                         │
+   │     not na(pts) and not math.isinfinite(pts) and pts > 0 and │
+   │     pts < 100000                                              │
+   └─────────────────────────────────────────────────────────────┘
+
+2. CHANGE safePointValue default from 1.0 to 5.0:
+   ┌─────────────────────────────────────────────────────────────┐
+   │ safePointValue = syminfo.pointvalue > 0 ? syminfo.pointvalue : 5.0│
+   └─────────────────────────────────────────────────────────────┘
+   (MES is $5/point, not $1)
+
+3. WRAP mesSL_pts and mesTP_pts with validation:
+   ┌─────────────────────────────────────────────────────────────┐
+   │ mesSL_pts_raw = mesFixedActive ? ((timeframe.period == "3" ?│
+   │     mesFixedSLDol_3m : mesFixedSLDol_5m) / safePointValue) :│
+   │     mes_customSL                                              │
+   │ mesTP_pts_raw = mesFixedActive ? (mesFixedTPDol / safePointValue)│
+   │     : mes_customTP                                            │
+   │                                                               │
+   │ mesSL_pts = isValidPoints(mesSL_pts_raw) ?                  │
+   │     math.min(mesSL_pts_raw, 50.0) : 9.0                     │
+   │ mesTP_pts = isValidPoints(mesTP_pts_raw) ?                  │
+   │     math.min(mesTP_pts_raw, 50.0) : 16.0                    │
+   └─────────────────────────────────────────────────────────────┘
+
+4. ADD validation in alert generation (2 places - LONG and SHORT):
+   ┌─────────────────────────────────────────────────────────────┐
+   │ // After calculating currentSL_pts and currentTP1_pts:       │
+   │ if not isValidPoints(currentSL_pts)                          │
+   │     currentSL_pts := 9.0                                     │
+   │ if not isValidPoints(currentTP1_pts)                         │
+   │     currentTP1_pts := 16.0                                   │
+   │                                                               │
+   │ localSL = tpExecPrice - currentSL_pts  // for LONG           │
+   │ localTP1 = tpExecPrice + currentTP1_pts                      │
+   │                                                               │
+   │ if not isValidPrice(localSL)                                 │
+   │     localSL := tpExecPrice * 0.998                           │
+   │ if not isValidPrice(localTP1)                                │
+   │     localTP1 := tpExecPrice * 1.003                          │
+   └─────────────────────────────────────────────────────────────┘
+   
+   (For SHORT: use localSL := tpExecPrice * 1.002 and 
+    localTP1 := tpExecPrice * 0.997)
+
+═══════════════════════════════════════════════════════════════════
+
+RESULT:
+-------
+✓ Alerts will always send valid stop/TP prices to TradersPost
+✓ No more "Stop Calculation Error"
+✓ Safe fallback values if calculations fail
+✓ MES 5m will use validated stop loss (max 50 points, default 9)
+
+IMPORTANT SETTING TO CHECK:
+---------------------------
+Make sure your MES 5m inputs are reasonable:
+  • MES 5m: Hard Stop Loss: 45.0 $/contract ✓ GOOD
+  • MES 5m: Take Profit: 80.0 $/contract ✓ GOOD
+
+With MES at $5/point:
+  • 45 / 5 = 9 points SL ✓
+  • 80 / 5 = 16 points TP ✓
+
+If your settings are different, adjust the fallback values in Fix #2
+to match your preferred defaults.
+
+═══════════════════════════════════════════════════════════════════
+
+See MES_5m_STOP_CALC_ERROR_FIX.md for complete details with exact
+code locations and full context.

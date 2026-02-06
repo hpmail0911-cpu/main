@@ -1,0 +1,8 @@
+//@version=5
+strategy("MES 3M-MES 5M-MNQ 3M-MNQ 5M@MAIN Cursor 2.5.2026 12:47 WIN-OPT MNQ/MES 3m/5m Multi-TF Cursor V71 5-Star Scalper P1/P2 SAFE", overlay=true, initial_capital=25000, default_qty_type=strategy.fixed, default_qty_value=1, pyramiding=1, calc_on_order_fills=false, calc_on_every_tick=true, process_orders_on_close=true, backtest_fill_limits_assumption=0, dynamic_requests=true)
+
+// ===== CRITICAL FIX: Add validation function at the top =====
+isValidPrice(price) =>
+    not na(price) and not math.isinfinite(price) and price > 0
+
+// ... [Keep all your existing input parameters and initial code the same until the calculation sections] ...
