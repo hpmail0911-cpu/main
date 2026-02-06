@@ -1,0 +1,250 @@
+// This file contains the corrected blocks that fix the reported Pine v5 compiler errors:
+// - Undeclared identifier: trailingStopActive, stopLossPoints, trailStopPoints, activeStopLoss,
+//   actualQty, isShort, activeStopLossShort
+// - 'isSingleContract' is already defined
+//
+// HOW TO USE:
+// 1) In your full script, locate the "=== ALERT TRACKING ===" block and replace it with
+//    the "ALERT TRACKING (FIXED)" block below.
+// 2) In your full script, locate the "=== 🎯 UNIFIED EXIT SYSTEM" block and replace the
+//    entire unified-exit section with the "UNIFIED EXIT SYSTEM (FIXED)" block below.
+//
+// Notes:
+// - This patch intentionally avoids reusing identifier names across sibling branches to
+//   prevent Pine's "already defined" errors.
+// - It also ensures any identifiers used in JSON strings are declared in the same scope.
+
+//@version=5
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERT TRACKING (FIXED)
+// ─────────────────────────────────────────────────────────────────────────────
+// Place these 3 vars near your other globals (outside of any if-blocks).
+var int entryStopLossPoints = na
+var int entryTakeProfitPoints = na
+var int entryTrailStopPoints = na
+
+// Replace your existing entry-alert calculation/message build with the block below.
+//
+// Assumes these already exist in your script (as in your pasted code):
+// - longCondition, enableTradersPostAlerts, strategy.position_size, finalContractQty
+// - alertSentForCurrentPosition, canSendAlert(), safeATR, currentInitialStopATR
+// - tpMultiplier, highWinRateMode, quickTPMultiplier, enforceMaxContracts, maxContractsGlobal
+// - getInstrumentTicker(), instrumentName, activeSignalType
+//
+// Example fixed long entry alert block:
+if longCondition and enableTradersPostAlerts and strategy.position_size == 0 and finalContractQty > 0 and not alertSentForCurrentPosition and canSendAlert("LONG")
+    float dynamicSL = close - (safeATR * currentInitialStopATR)
+    float dynamicTP = close + (safeATR * tpMultiplier * (highWinRateMode ? quickTPMultiplier : 1.0))
+
+    entryStopLossPoints := int(math.round((close - dynamicSL) / syminfo.mintick))
+    entryTakeProfitPoints := int(math.round((dynamicTP - close) / syminfo.mintick))
+    entryTrailStopPoints := int(math.round(entryStopLossPoints * 0.6))
+
+    int alertQuantity = enforceMaxContracts ? int(math.min(finalContractQty, maxContractsGlobal)) : int(finalContractQty)
+
+    string longEntryMessage = '{"ticker": "' + getInstrumentTicker() +
+      '", "action": "buy"' +
+      ', "orderType": "market"' +
+      ', "quantity": ' + str.tostring(alertQuantity) +
+      ', "stop_loss": ' + str.tostring(entryStopLossPoints) +
+      ', "take_profit": ' + str.tostring(entryTakeProfitPoints) +
+      ', "trailing_stop": ' + str.tostring(entryTrailStopPoints) +
+      ', "timeframe": "' + timeframe.period +
+      '", "instrument": "' + instrumentName +
+      '", "signal_type": "' + activeSignalType +
+      '"}'
+
+    // (optional but recommended)
+    alert(longEntryMessage, alert.freq_once_per_bar)
+    alertSentForCurrentPosition := true
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIFIED EXIT SYSTEM (FIXED)
+// ─────────────────────────────────────────────────────────────────────────────
+// Place/keep this near your globals (your pasted script already has it).
+var bool trailingStopActive = false
+
+// Drop-in replacement for your unified exit section.
+//
+// Assumes these already exist in your script (as in your pasted code):
+// - alertOnlyMode, entryPrice, barsInPosition, enableHardStopProtection, hardStopHit, currentProfitDollars
+// - currentMaxLoss, peakProfit, currentMaeTrigger, maeDrawbackPercent, endOfDayExit
+// - enableTradersPostAlerts, hardStopAlertFired, maxLossAlertFired, maeExitAlertFired, eodAlertFired
+// - anyExitAlertSent, getInstrumentTicker()
+// - futuresStopDistance, currentInitialStopATR, highWinRateMode, widerSLMultiplier
+// - currentBreakevenTrigger, profitLock1Reached/2Reached/3Reached, profitLock1Level/2Level/3Level
+// - breakevenReached, useSmartTrailing, trailActivationRatio, futuresTPDistance, safeATR, isMYM
+// - useFixedContractSize, fixedContracts, useEnhancedTP, quickTPMultiplier, tpMultiplier, useSL
+//
+if not alertOnlyMode and strategy.position_size != 0 and not na(entryPrice) and barsInPosition >= 1
+    bool posIsLong = strategy.position_size > 0
+    bool posIsShort = strategy.position_size < 0
+    int actualQty = int(math.max(math.abs(strategy.position_size), 1))
+
+    bool emergencyExit = false
+    string emergencyReason = ""
+
+    // EMERGENCY EXITS
+    if enableHardStopProtection and hardStopHit and barsInPosition >= 2
+        emergencyExit := true
+        emergencyReason := "🚨 HARD STOP $55"
+        if enableTradersPostAlerts and not hardStopAlertFired
+            string emergencyExitMessage = '{"ticker": "' + getInstrumentTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "emergency_hard_stop"}'
+            alert(emergencyExitMessage, alert.freq_once_per_bar)
+            hardStopAlertFired := true
+            anyExitAlertSent := true
+
+    if not emergencyExit and math.abs(currentProfitDollars) >= currentMaxLoss and currentProfitDollars < 0 and barsInPosition >= 2
+        emergencyExit := true
+        emergencyReason := "🚨 Max Loss"
+        if enableTradersPostAlerts and not maxLossAlertFired
+            string exitMessage = '{"ticker": "' + getInstrumentTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "max_loss_exceeded"}'
+            alert(exitMessage, alert.freq_once_per_bar)
+            maxLossAlertFired := true
+            anyExitAlertSent := true
+
+    float maeThreshold = highWinRateMode ? currentMaeTrigger * 0.7 : currentMaeTrigger
+    if not emergencyExit and peakProfit > maeThreshold and currentProfitDollars < (peakProfit * maeDrawbackPercent) and barsInPosition >= 3
+        emergencyExit := true
+        emergencyReason := "🛡️ MAE Protection"
+        if enableTradersPostAlerts and not maeExitAlertFired
+            string exitMessage = '{"ticker": "' + getInstrumentTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "mae_protection"}'
+            alert(exitMessage, alert.freq_once_per_bar)
+            maeExitAlertFired := true
+            anyExitAlertSent := true
+
+    if not emergencyExit and endOfDayExit
+        emergencyExit := true
+        emergencyReason := "🏁 End of Day"
+        if enableTradersPostAlerts and not eodAlertFired
+            string exitMessage = '{"ticker": "' + getInstrumentTicker() + '", "action": "exit", "quantity": "' + str.tostring(actualQty) + '", "reason": "end_of_day"}'
+            alert(exitMessage, alert.freq_once_per_bar)
+            eodAlertFired := true
+            anyExitAlertSent := true
+
+    if emergencyExit
+        strategy.close_all(comment=emergencyReason)
+        trailingStopActive := false
+        anyExitAlertSent := true
+
+    // MANAGED EXITS
+    if not emergencyExit
+        bool isSingleContractPosition = (useFixedContractSize and fixedContracts == 1) or (actualQty <= 1)
+
+        if posIsLong
+            float baseStopLossLong = entryPrice - (futuresStopDistance * currentInitialStopATR)
+            float activeStopLossLong = baseStopLossLong
+
+            if highWinRateMode
+                activeStopLossLong := entryPrice - (futuresStopDistance * currentInitialStopATR * widerSLMultiplier)
+
+            float beThreshold = highWinRateMode ? currentBreakevenTrigger * 0.5 : currentBreakevenTrigger
+            if currentProfitDollars >= beThreshold
+                float breakevenStop = entryPrice + (syminfo.mintick * 2)
+                activeStopLossLong := math.max(activeStopLossLong, breakevenStop)
+
+            if profitLock3Reached and not na(profitLock3Level)
+                float lockStop3 = entryPrice + (profitLock3Level * 0.7)
+                activeStopLossLong := math.max(activeStopLossLong, lockStop3)
+            else if profitLock2Reached and not na(profitLock2Level)
+                float lockStop2 = entryPrice + (profitLock2Level * 0.6)
+                activeStopLossLong := math.max(activeStopLossLong, lockStop2)
+            else if profitLock1Reached and not na(profitLock1Level)
+                float lockStop1 = entryPrice + (profitLock1Level * 0.5)
+                activeStopLossLong := math.max(activeStopLossLong, lockStop1)
+            else if breakevenReached
+                activeStopLossLong := math.max(activeStopLossLong, entryPrice)
+
+            float trailActivation = highWinRateMode ? trailActivationRatio * 0.6 : trailActivationRatio
+            if useSmartTrailing and close > entryPrice + (futuresTPDistance * trailActivation)
+                float trailDistance = safeATR * (isMYM ? 1.0 : 1.2)
+                float trailingStop = close - trailDistance
+                activeStopLossLong := math.max(activeStopLossLong, trailingStop)
+                trailingStopActive := true
+
+            int managedStopLossPointsLong = int(math.round((close - activeStopLossLong) / syminfo.mintick))
+            managedStopLossPointsLong := int(math.max(managedStopLossPointsLong, 1))
+            if highWinRateMode
+                managedStopLossPointsLong := int(math.round(managedStopLossPointsLong * widerSLMultiplier))
+
+            if useEnhancedTP and managedStopLossPointsLong > 0
+                float tpMult = highWinRateMode ? quickTPMultiplier : 1.0
+                int tp1Points = int(math.round((safeATR * tpMult * 0.5) / syminfo.mintick))
+                int tp2Points = int(math.round((safeATR * tpMultiplier * 1.2 * tpMult) / syminfo.mintick))
+                int tp3Points = int(math.round((safeATR * tpMultiplier * 1.8 * tpMult) / syminfo.mintick))
+                int tp4Points = int(math.round((safeATR * tpMultiplier * 2.5 * tpMult) / syminfo.mintick))
+
+                if isSingleContractPosition
+                    int quickTP = tp1Points > 0 ? tp1Points : int(math.round((safeATR * 0.5) / syminfo.mintick))
+                    strategy.exit("TP_SINGLE", profit=quickTP, loss=managedStopLossPointsLong, comment="TP")
+                else
+                    if tp1Points > 0
+                        strategy.exit("TP1", qty_percent=50, profit=tp1Points, loss=managedStopLossPointsLong, comment="TP1 50%")
+                    if tp2Points > 0
+                        strategy.exit("TP2", qty_percent=30, profit=tp2Points, loss=managedStopLossPointsLong, comment="TP2 30%")
+                    if tp3Points > 0
+                        strategy.exit("TP3", qty_percent=15, profit=tp3Points, loss=managedStopLossPointsLong, comment="TP3 15%")
+                    if tp4Points > 0
+                        strategy.exit("TP4", qty_percent=5, profit=tp4Points, loss=managedStopLossPointsLong, comment="TP4 5%")
+            else if useSL and managedStopLossPointsLong > 0
+                strategy.exit("ProtectiveSL", loss=managedStopLossPointsLong, comment="STOP LOSS")
+
+        if posIsShort
+            float baseStopLossShort = entryPrice + (futuresStopDistance * currentInitialStopATR)
+            float activeStopLossShort = baseStopLossShort
+
+            if highWinRateMode
+                activeStopLossShort := entryPrice + (futuresStopDistance * currentInitialStopATR * widerSLMultiplier)
+
+            float beThreshold = highWinRateMode ? currentBreakevenTrigger * 0.5 : currentBreakevenTrigger
+            if currentProfitDollars >= beThreshold
+                float breakevenStop = entryPrice - (syminfo.mintick * 2)
+                activeStopLossShort := math.min(activeStopLossShort, breakevenStop)
+
+            if profitLock3Reached and not na(profitLock3Level)
+                float lockStop3 = entryPrice - (profitLock3Level * 0.7)
+                activeStopLossShort := math.min(activeStopLossShort, lockStop3)
+            else if profitLock2Reached and not na(profitLock2Level)
+                float lockStop2 = entryPrice - (profitLock2Level * 0.6)
+                activeStopLossShort := math.min(activeStopLossShort, lockStop2)
+            else if profitLock1Reached and not na(profitLock1Level)
+                float lockStop1 = entryPrice - (profitLock1Level * 0.5)
+                activeStopLossShort := math.min(activeStopLossShort, lockStop1)
+            else if breakevenReached
+                activeStopLossShort := math.min(activeStopLossShort, entryPrice)
+
+            float trailActivation = highWinRateMode ? trailActivationRatio * 0.6 : trailActivationRatio
+            if useSmartTrailing and close < entryPrice - (futuresTPDistance * trailActivation)
+                float trailDistance = safeATR * (isMYM ? 1.0 : 1.2)
+                float trailingStop = close + trailDistance
+                activeStopLossShort := math.min(activeStopLossShort, trailingStop)
+                trailingStopActive := true
+
+            int managedStopLossPointsShort = int(math.round((activeStopLossShort - close) / syminfo.mintick))
+            managedStopLossPointsShort := int(math.max(managedStopLossPointsShort, 1))
+            if highWinRateMode
+                managedStopLossPointsShort := int(math.round(managedStopLossPointsShort * widerSLMultiplier))
+
+            if useEnhancedTP and managedStopLossPointsShort > 0
+                float tpMult = highWinRateMode ? quickTPMultiplier : 1.0
+                int tp1Points = int(math.round((safeATR * tpMult * 0.5) / syminfo.mintick))
+                int tp2Points = int(math.round((safeATR * tpMultiplier * 1.2 * tpMult) / syminfo.mintick))
+                int tp3Points = int(math.round((safeATR * tpMultiplier * 1.8 * tpMult) / syminfo.mintick))
+                int tp4Points = int(math.round((safeATR * tpMultiplier * 2.5 * tpMult) / syminfo.mintick))
+
+                if isSingleContractPosition
+                    int quickTP = tp1Points > 0 ? tp1Points : int(math.round((safeATR * 0.5) / syminfo.mintick))
+                    strategy.exit("TP_SINGLE", profit=quickTP, loss=managedStopLossPointsShort, comment="TP")
+                else
+                    if tp1Points > 0
+                        strategy.exit("TP1", qty_percent=50, profit=tp1Points, loss=managedStopLossPointsShort, comment="TP1 50%")
+                    if tp2Points > 0
+                        strategy.exit("TP2", qty_percent=30, profit=tp2Points, loss=managedStopLossPointsShort, comment="TP2 30%")
+                    if tp3Points > 0
+                        strategy.exit("TP3", qty_percent=15, profit=tp3Points, loss=managedStopLossPointsShort, comment="TP3 15%")
+                    if tp4Points > 0
+                        strategy.exit("TP4", qty_percent=5, profit=tp4Points, loss=managedStopLossPointsShort, comment="TP4 5%")
+            else if useSL and managedStopLossPointsShort > 0
+                strategy.exit("ProtectiveSL", loss=managedStopLossPointsShort, comment="STOP LOSS")
+
