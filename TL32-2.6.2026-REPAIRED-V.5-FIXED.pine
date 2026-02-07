@@ -1246,7 +1246,7 @@ getManualAlertTicker() =>
 
 isContinuousTicker(sym) =>
 
-    str.ends_with(sym, "!")
+    str.length(sym) > 0 and str.substring(sym, str.length(sym) - 1) == "!"
 
 getMgcActiveContract() =>
 
