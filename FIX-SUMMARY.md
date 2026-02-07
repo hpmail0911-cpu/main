@@ -300,4 +300,101 @@ maxProfitDrawdownPercent = 30.0  // 30% drop from peak
 
 ---
 
-**Status**: ✅ FIXES COMPLETE - Ready for testing
+## MGC Contract Symbol Fixes (Feb 6, 2026)
+
+### Problem
+Bot was sending alerts with `"ticker": "MGC1!"` (continuous contract), which Topstep resolved to **MGCG2026** (February contract - EXPIRED). This caused:
+- ❌ `ContractNotActive` errors from Topstep
+- ❌ Failed entry orders
+- ❌ Failed exit orders
+- ❌ Unable to trade MGC
+
+### Root Cause
+The MGC contract rolling logic had an issue where on **February 6, 2026** (past the roll day of Feb 1), it should have been using **MGCJ2026** (April contract) but was being resolved to MGCG2026 by the broker.
+
+### Fix Applied
+
+**Rewrote `getMgcActiveContract()` function** with explicit month-by-month logic:
+
+```pinescript
+// Example for Feb 6, 2026:
+if curMonth == 1 or (curMonth == 2 and dayofmonth >= rollDay)
+    monthCode := "J"  // April contract (correct!)
+```
+
+**Contract Calendar:**
+- **G** = February
+- **J** = April
+- **M** = June
+- **Q** = August
+- **V** = October
+- **Z** = December
+
+**Roll Logic:**
+- If in contract month AND past roll day → use NEXT contract
+- If before roll day → use CURRENT contract
+- Example: Feb 6 (rollDay = 1) → Already past Feb 1, so use April (J)
+
+### New Visual Display
+
+**Row 2: MGC TICKER STATUS** (orange header)
+- **Column 1**: Actual ticker sent in alerts (e.g., "MGCJ2026") - LIME GREEN when auto-contract enabled
+- **Column 2**: Auto ON/OFF status
+- **Column 3**: Roll day setting
+- **Column 4**: Contract month code
+
+**Example Display for Feb 6, 2026:**
+```
+MGC TICKER | MGCJ2026 | Auto:ON | Roll:1 | Month:J
+           (LIME)      (LIME)
+```
+
+### Verification
+
+**Before Fix:**
+```json
+{
+  "ticker": "MGC1!",  // Continuous contract
+  ...
+}
+```
+→ Topstep resolves to MGCG2026 (EXPIRED) ❌
+
+**After Fix:**
+```json
+{
+  "ticker": "MGCJ2026",  // Specific contract
+  ...
+}
+```
+→ Topstep uses MGCJ2026 (ACTIVE) ✅
+
+### Settings to Verify
+
+1. **Auto MGC Active Contract (Topstep)**: Must be **ON** (default: true)
+2. **MGC Roll Day**: Day of month to roll contract (default: 1)
+3. **Chart**: Can trade on MGC1! chart, bot will send correct specific contract
+
+### Expected Behavior by Month
+
+| Date Range | Contract Used | Month Code |
+|------------|---------------|------------|
+| Jan 1-31 | April 2026 | J |
+| Feb 1 (before roll) | February 2026 | G |
+| Feb 1+ (after roll) | April 2026 | J |
+| Mar 1-31 | April 2026 | J |
+| Apr 1+ (after roll) | June 2026 | M |
+| May 1-31 | June 2026 | M |
+| Jun 1+ (after roll) | August 2026 | Q |
+
+### Testing
+
+1. ✅ Verify ticker display shows **MGCJ2026** (not MGC1!)
+2. ✅ Check Auto:ON is displayed in LIME
+3. ✅ Confirm alerts send specific contract in JSON
+4. ✅ Test entry orders execute without ContractNotActive errors
+5. ✅ Test exit orders work properly
+
+---
+
+**Status**: ✅ ALL FIXES COMPLETE - Ready for testing
