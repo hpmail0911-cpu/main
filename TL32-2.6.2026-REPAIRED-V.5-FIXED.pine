@@ -1260,35 +1260,87 @@ getMgcActiveContract() =>
 
     string monthCode = ""
 
-    if curMonth < 2 or (curMonth == 2 and dayofmonth < rollDay)
+    // MGC contracts: G(Feb), J(Apr), M(Jun), Q(Aug), V(Oct), Z(Dec)
 
-        monthCode := "G"
+    // Roll logic: If current month OR (in roll month AND past roll day), use NEXT contract
 
-    else if curMonth < 4 or (curMonth == 4 and dayofmonth < rollDay)
+    
+
+    if curMonth == 1 or (curMonth == 2 and dayofmonth >= rollDay)
+
+        // January or Feb after roll day → April contract (J)
 
         monthCode := "J"
 
-    else if curMonth < 6 or (curMonth == 6 and dayofmonth < rollDay)
+    else if curMonth == 2 and dayofmonth < rollDay
+
+        // February before roll day → February contract (G)
+
+        monthCode := "G"
+
+    else if curMonth == 3 or (curMonth == 4 and dayofmonth >= rollDay)
+
+        // March or April after roll day → June contract (M)
 
         monthCode := "M"
 
-    else if curMonth < 8 or (curMonth == 8 and dayofmonth < rollDay)
+    else if curMonth == 4 and dayofmonth < rollDay
+
+        // April before roll day → April contract (J)
+
+        monthCode := "J"
+
+    else if curMonth == 5 or (curMonth == 6 and dayofmonth >= rollDay)
+
+        // May or June after roll day → August contract (Q)
 
         monthCode := "Q"
 
-    else if curMonth < 10 or (curMonth == 10 and dayofmonth < rollDay)
+    else if curMonth == 6 and dayofmonth < rollDay
+
+        // June before roll day → June contract (M)
+
+        monthCode := "M"
+
+    else if curMonth == 7 or (curMonth == 8 and dayofmonth >= rollDay)
+
+        // July or August after roll day → October contract (V)
 
         monthCode := "V"
 
-    else if curMonth < 12 or (curMonth == 12 and dayofmonth < rollDay)
+    else if curMonth == 8 and dayofmonth < rollDay
+
+        // August before roll day → August contract (Q)
+
+        monthCode := "Q"
+
+    else if curMonth == 9 or (curMonth == 10 and dayofmonth >= rollDay)
+
+        // September or October after roll day → December contract (Z)
 
         monthCode := "Z"
 
-    else
+    else if curMonth == 10 and dayofmonth < rollDay
+
+        // October before roll day → October contract (V)
+
+        monthCode := "V"
+
+    else if curMonth == 11 or (curMonth == 12 and dayofmonth >= rollDay)
+
+        // November or December after roll day → February NEXT YEAR (G)
 
         monthCode := "G"
 
         targetYear := curYear + 1
+
+    else if curMonth == 12 and dayofmonth < rollDay
+
+        // December before roll day → December contract (Z)
+
+        monthCode := "Z"
+
+    
 
     string root = str.contains(syminfo.ticker, "MGC") ? "MGC" : "GC"
 
@@ -1942,7 +1994,7 @@ if not alertOnlyMode and strategy.position_size != 0 and not na(entryPrice) and 
 
 // === VISUAL DISPLAY ===
 
-var table riskTable = table.new(position.top_right, 5, 11, bgcolor=color.new(color.black, 85), border_width=1)
+var table riskTable = table.new(position.top_right, 5, 12, bgcolor=color.new(color.black, 85), border_width=1)
 
 if barstate.islast
 
@@ -1970,61 +2022,97 @@ if barstate.islast
 
     table.cell(riskTable, 4, 1, "Bars:" + str.tostring(barsInPosition), text_color=color.white)
 
-    table.cell(riskTable, 0, 2, "P&L", text_color=color.white, bgcolor=color.new(color.purple, 70))
+    
 
-    table.cell(riskTable, 1, 2, "$" + str.tostring(currentProfitDollars, "#.##"), text_color=currentProfitDollars >= 0 ? color.lime : color.red)
+    // === MGC CONTRACT STATUS ROW ===
 
-    table.cell(riskTable, 2, 2, "Peak:$" + str.tostring(peakProfit, "#"), text_color=color.white)
+    if isMGC
 
-    table.cell(riskTable, 3, 2, "Trades:" + str.tostring(todayTradeCount), text_color=color.white)
+        table.cell(riskTable, 0, 2, "MGC TICKER", text_color=color.white, bgcolor=color.new(color.orange, 70))
 
-    table.cell(riskTable, 4, 2, "/" + str.tostring(maxDailyTrades), text_color=maxTradesReached ? color.red : color.lime)
+        alertTickerDisplay = getAlertTicker()
+
+        table.cell(riskTable, 1, 2, alertTickerDisplay, text_color=useAutoMgcContract ? color.lime : color.yellow, tooltip="Ticker used in alerts")
+
+        table.cell(riskTable, 2, 2, "Auto:" + (useAutoMgcContract ? "ON" : "OFF"), text_color=useAutoMgcContract ? color.lime : color.red)
+
+        table.cell(riskTable, 3, 2, "Roll:" + str.tostring(mgcRollDay), text_color=color.white)
+
+        mgcContractMonth = str.substring(alertTickerDisplay, str.length(alertTickerDisplay) - 5, str.length(alertTickerDisplay) - 4)
+
+        table.cell(riskTable, 4, 2, "Month:" + mgcContractMonth, text_color=color.white)
+
+    else
+
+        table.cell(riskTable, 0, 2, "TICKER", text_color=color.white, bgcolor=color.new(color.blue, 70))
+
+        alertTickerDisplay = getAlertTicker()
+
+        table.cell(riskTable, 1, 2, alertTickerDisplay, text_color=color.white)
+
+        table.cell(riskTable, 2, 2, "", text_color=color.white)
+
+        table.cell(riskTable, 3, 2, "", text_color=color.white)
+
+        table.cell(riskTable, 4, 2, "", text_color=color.white)
+
+    
+
+    table.cell(riskTable, 0, 3, "P&L", text_color=color.white, bgcolor=color.new(color.purple, 70))
+
+    table.cell(riskTable, 1, 3, "$" + str.tostring(currentProfitDollars, "#.##"), text_color=currentProfitDollars >= 0 ? color.lime : color.red)
+
+    table.cell(riskTable, 2, 3, "Peak:$" + str.tostring(peakProfit, "#"), text_color=color.white)
+
+    table.cell(riskTable, 3, 3, "Trades:" + str.tostring(todayTradeCount), text_color=color.white)
+
+    table.cell(riskTable, 4, 3, "/" + str.tostring(maxDailyTrades), text_color=maxTradesReached ? color.red : color.lime)
 
     
 
     // === FIXED: EXIT STATUS DISPLAY ===
 
-    table.cell(riskTable, 0, 3, "EXIT STATUS", text_color=color.white, bgcolor=color.new(color.maroon, 70))
+    table.cell(riskTable, 0, 4, "EXIT STATUS", text_color=color.white, bgcolor=color.new(color.maroon, 70))
 
     
 
     profitDrawdownPercent = peakProfit > 0 ? ((peakProfit - currentProfitDollars) / peakProfit) * 100 : 0
 
-    table.cell(riskTable, 1, 3, "Drawdown:" + str.tostring(profitDrawdownPercent, "#.#") + "%", text_color=maxDrawdownReached ? color.red : color.white)
+    table.cell(riskTable, 1, 4, "Drawdown:" + str.tostring(profitDrawdownPercent, "#.#") + "%", text_color=maxDrawdownReached ? color.red : color.white)
 
     
 
-    table.cell(riskTable, 2, 3, "MAE:" + (maeExitCondition ? "FIRE" : "OK"), text_color=maeExitCondition ? color.red : color.lime)
+    table.cell(riskTable, 2, 4, "MAE:" + (maeExitCondition ? "FIRE" : "OK"), text_color=maeExitCondition ? color.red : color.lime)
 
     
 
-    table.cell(riskTable, 3, 3, "MaxLoss:" + (maxLossCondition ? "HIT" : "OK"), text_color=maxLossCondition ? color.red : color.lime)
+    table.cell(riskTable, 3, 4, "MaxLoss:" + (maxLossCondition ? "HIT" : "OK"), text_color=maxLossCondition ? color.red : color.lime)
 
     
 
-    table.cell(riskTable, 4, 3, "Hard:" + (hardStopHit ? "HIT" : "OK"), text_color=hardStopHit ? color.red : color.lime)
+    table.cell(riskTable, 4, 4, "Hard:" + (hardStopHit ? "HIT" : "OK"), text_color=hardStopHit ? color.red : color.lime)
 
     
 
-    table.cell(riskTable, 0, 4, "MODE", text_color=color.white, bgcolor=color.new(color.teal, 70))
+    table.cell(riskTable, 0, 5, "MODE", text_color=color.white, bgcolor=color.new(color.teal, 70))
 
-    table.cell(riskTable, 1, 4, highWinRateMode ? "HIGH WR" : "NORMAL", text_color=highWinRateMode ? color.lime : color.yellow)
+    table.cell(riskTable, 1, 5, highWinRateMode ? "HIGH WR" : "NORMAL", text_color=highWinRateMode ? color.lime : color.yellow)
 
-    table.cell(riskTable, 2, 4, "MTF:" + (enableMTF ? "ON" : "OFF"), text_color=enableMTF ? (mtfLongConfirm or mtfShortConfirm ? color.lime : color.red) : color.gray)
+    table.cell(riskTable, 2, 5, "MTF:" + (enableMTF ? "ON" : "OFF"), text_color=enableMTF ? (mtfLongConfirm or mtfShortConfirm ? color.lime : color.red) : color.gray)
 
-    table.cell(riskTable, 3, 4, "EARLY:" + (enableEarlyTrend ? "ON" : "OFF"), text_color=enableEarlyTrend ? color.lime : color.gray)
+    table.cell(riskTable, 3, 5, "EARLY:" + (enableEarlyTrend ? "ON" : "OFF"), text_color=enableEarlyTrend ? color.lime : color.gray)
 
-    table.cell(riskTable, 4, 4, isScalpTimeframe ? "SCALP" : "SWING", text_color=color.white)
+    table.cell(riskTable, 4, 5, isScalpTimeframe ? "SCALP" : "SWING", text_color=color.white)
 
-    table.cell(riskTable, 0, 5, "PROTECT", text_color=color.white, bgcolor=color.new(color.navy, 70))
+    table.cell(riskTable, 0, 6, "PROTECT", text_color=color.white, bgcolor=color.new(color.navy, 70))
 
-    table.cell(riskTable, 1, 5, "DEDUP:" + (enableAlertDeduplication ? "ON" : "OFF"), text_color=enableAlertDeduplication ? color.lime : color.gray)
+    table.cell(riskTable, 1, 6, "DEDUP:" + (enableAlertDeduplication ? "ON" : "OFF"), text_color=enableAlertDeduplication ? color.lime : color.gray)
 
-    table.cell(riskTable, 2, 5, "SLIP:" + (enableSlippageProtection ? "ON" : "OFF"), text_color=enableSlippageProtection ? color.lime : color.gray)
+    table.cell(riskTable, 2, 6, "SLIP:" + (enableSlippageProtection ? "ON" : "OFF"), text_color=enableSlippageProtection ? color.lime : color.gray)
 
-    table.cell(riskTable, 3, 5, "COOL:" + (enableCooldownPeriods ? str.tostring(cooldownSeconds) + "s" : "OFF"), text_color=enableCooldownPeriods ? color.lime : color.gray)
+    table.cell(riskTable, 3, 6, "COOL:" + (enableCooldownPeriods ? str.tostring(cooldownSeconds) + "s" : "OFF"), text_color=enableCooldownPeriods ? color.lime : color.gray)
 
-    table.cell(riskTable, 4, 5, "MAX:" + str.tostring(maxContractsGlobal), text_color=enforceMaxContracts ? color.lime : color.gray)
+    table.cell(riskTable, 4, 6, "MAX:" + str.tostring(maxContractsGlobal), text_color=enforceMaxContracts ? color.lime : color.gray)
 
     barsSinceLast = bar_index - lastAlertBar
 
@@ -2032,61 +2120,61 @@ if barstate.islast
 
     canSendAlertNow = canSendAlert("TEST")
 
-    table.cell(riskTable, 0, 6, "LAST ALERT", text_color=color.white, bgcolor=color.new(color.orange, 70))
+    table.cell(riskTable, 0, 7, "LAST ALERT", text_color=color.white, bgcolor=color.new(color.orange, 70))
 
-    table.cell(riskTable, 1, 6, str.tostring(barsSinceLast) + " bars", text_color=color.white)
+    table.cell(riskTable, 1, 7, str.tostring(barsSinceLast) + " bars", text_color=color.white)
 
-    table.cell(riskTable, 2, 6, str.tostring(timeSinceLast) + "s", text_color=color.white)
+    table.cell(riskTable, 2, 7, str.tostring(timeSinceLast) + "s", text_color=color.white)
 
-    table.cell(riskTable, 3, 6, lastAlertType, text_color=color.yellow)
+    table.cell(riskTable, 3, 7, lastAlertType, text_color=color.yellow)
 
-    table.cell(riskTable, 4, 6, canSendAlertNow ? "READY" : "WAIT", text_color=canSendAlertNow ? color.lime : color.red)
+    table.cell(riskTable, 4, 7, canSendAlertNow ? "READY" : "WAIT", text_color=canSendAlertNow ? color.lime : color.red)
 
     winRate = strategy.closedtrades > 0 ? (strategy.wintrades / strategy.closedtrades) * 100 : 0
 
-    table.cell(riskTable, 0, 7, "STATS", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(riskTable, 0, 8, "STATS", text_color=color.white, bgcolor=color.new(color.gray, 80))
 
-    table.cell(riskTable, 1, 7, "Win%:" + str.tostring(winRate, "#.#"), text_color=winRate >= 70 ? color.lime : winRate >= 60 ? color.yellow : color.red)
+    table.cell(riskTable, 1, 8, "Win%:" + str.tostring(winRate, "#.#"), text_color=winRate >= 70 ? color.lime : winRate >= 60 ? color.yellow : color.red)
 
-    table.cell(riskTable, 2, 7, "Trades:" + str.tostring(strategy.closedtrades), text_color=color.white)
+    table.cell(riskTable, 2, 8, "Trades:" + str.tostring(strategy.closedtrades), text_color=color.white)
 
-    table.cell(riskTable, 3, 7, "Net:$" + str.tostring(strategy.netprofit, "#"), text_color=strategy.netprofit >= 0 ? color.lime : color.red)
+    table.cell(riskTable, 3, 8, "Net:$" + str.tostring(strategy.netprofit, "#"), text_color=strategy.netprofit >= 0 ? color.lime : color.red)
 
-    table.cell(riskTable, 4, 7, "RSI:" + str.tostring(rsi, "#"), text_color=rsi > 50 ? color.lime : color.red)
+    table.cell(riskTable, 4, 8, "RSI:" + str.tostring(rsi, "#"), text_color=rsi > 50 ? color.lime : color.red)
 
-    table.cell(riskTable, 0, 8, "RISK", text_color=color.white, bgcolor=color.new(color.red, 70))
+    table.cell(riskTable, 0, 9, "RISK", text_color=color.white, bgcolor=color.new(color.red, 70))
 
-    table.cell(riskTable, 1, 8, "Daily:$" + str.tostring(totalDailyLoss, "#"), text_color=totalDailyLoss >= maxTotalDailyLoss ? color.red : color.white)
+    table.cell(riskTable, 1, 9, "Daily:$" + str.tostring(totalDailyLoss, "#"), text_color=totalDailyLoss >= maxTotalDailyLoss ? color.red : color.white)
 
-    table.cell(riskTable, 2, 8, "Max:$" + str.tostring(maxTotalDailyLoss, "#"), text_color=color.white)
+    table.cell(riskTable, 2, 9, "Max:$" + str.tostring(maxTotalDailyLoss, "#"), text_color=color.white)
 
-    table.cell(riskTable, 3, 8, "Left:$" + str.tostring(maxTotalDailyLoss - totalDailyLoss, "#"), text_color=color.lime)
+    table.cell(riskTable, 3, 9, "Left:$" + str.tostring(maxTotalDailyLoss - totalDailyLoss, "#"), text_color=color.lime)
 
-    table.cell(riskTable, 4, 8, totalDailyLossReached ? "LOCKED" : "ACTIVE", text_color=totalDailyLossReached ? color.red : color.lime)
+    table.cell(riskTable, 4, 9, totalDailyLossReached ? "LOCKED" : "ACTIVE", text_color=totalDailyLossReached ? color.red : color.lime)
 
-    table.cell(riskTable, 0, 9, "HARD STOP", text_color=color.white, bgcolor=color.new(color.maroon, 70))
+    table.cell(riskTable, 0, 10, "HARD STOP", text_color=color.white, bgcolor=color.new(color.maroon, 70))
 
-    table.cell(riskTable, 1, 9, enableHardStopProtection ? "ACTIVE" : "OFF", text_color=enableHardStopProtection ? color.lime : color.gray)
+    table.cell(riskTable, 1, 10, enableHardStopProtection ? "ACTIVE" : "OFF", text_color=enableHardStopProtection ? color.lime : color.gray)
 
-    table.cell(riskTable, 2, 9, "$" + str.tostring(maxLossPerTradeDollars, "#"), text_color=color.white)
+    table.cell(riskTable, 2, 10, "$" + str.tostring(maxLossPerTradeDollars, "#"), text_color=color.white)
 
-    table.cell(riskTable, 3, 9, str.tostring(maxPointsRisk, "#.#") + "pts", text_color=color.white)
+    table.cell(riskTable, 3, 10, str.tostring(maxPointsRisk, "#.#") + "pts", text_color=color.white)
 
-    table.cell(riskTable, 4, 9, hardStopHit ? "HIT" : "OK", text_color=hardStopHit ? color.red : color.lime)
+    table.cell(riskTable, 4, 10, hardStopHit ? "HIT" : "OK", text_color=hardStopHit ? color.red : color.lime)
 
     
 
     // === NEW: MAE THRESHOLD DISPLAY ===
 
-    table.cell(riskTable, 0, 10, "MAE INFO", text_color=color.white, bgcolor=color.new(color.purple, 70))
+    table.cell(riskTable, 0, 11, "MAE INFO", text_color=color.white, bgcolor=color.new(color.purple, 70))
 
-    table.cell(riskTable, 1, 10, "Thresh:$" + str.tostring(maeThreshold, "#"), text_color=color.white)
+    table.cell(riskTable, 1, 11, "Thresh:$" + str.tostring(maeThreshold, "#"), text_color=color.white)
 
-    table.cell(riskTable, 2, 10, "Draw:" + str.tostring(maeDrawbackPercent * 100, "#") + "%", text_color=color.white)
+    table.cell(riskTable, 2, 11, "Draw:" + str.tostring(maeDrawbackPercent * 100, "#") + "%", text_color=color.white)
 
-    table.cell(riskTable, 3, 10, "Peak:$" + str.tostring(peakProfit, "#.#"), text_color=color.white)
+    table.cell(riskTable, 3, 11, "Peak:$" + str.tostring(peakProfit, "#.#"), text_color=color.white)
 
-    table.cell(riskTable, 4, 10, "Curr:$" + str.tostring(currentProfitDollars, "#.#"), text_color=currentProfitDollars >= 0 ? color.lime : color.red)
+    table.cell(riskTable, 4, 11, "Curr:$" + str.tostring(currentProfitDollars, "#.#"), text_color=currentProfitDollars >= 0 ? color.lime : color.red)
 
 plot(hullMain, color=trend == 1 ? color.green : color.red, linewidth=2, title="Hull Main")
 
