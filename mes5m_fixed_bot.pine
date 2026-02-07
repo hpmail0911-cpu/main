@@ -494,6 +494,28 @@ preTP1KeepDollars = input.float(4.0, "Keep Profit ($)", minval=0, maxval=500, st
 enableGapStopProtection = input.bool(true, "✅ Gap Stop Protection", group=prodGroup)
 distToDollarPerContract(dist) =>
     dist * syminfo.pointvalue
+stopCheckLong(stopPrice) =>
+    bool ok = false
+    bool crossed = false
+    float val = na
+    if not na(stopPrice) and stopPrice > 0
+        if stopPrice < close
+            ok := true
+            val := stopPrice
+        else
+            crossed := true
+    [ok, val, crossed]
+stopCheckShort(stopPrice) =>
+    bool ok = false
+    bool crossed = false
+    float val = na
+    if not na(stopPrice) and stopPrice > 0
+        if stopPrice > close
+            ok := true
+            val := stopPrice
+        else
+            crossed := true
+    [ok, val, crossed]
 useFixedContractSize = input.bool(false, "Use Fixed Contract Size")
 fixedContracts = input.int(1, "Fixed Contract Size", minval=1, maxval=10)
 ultraMode = input.bool(true, "Enable Ultra Trading Mode")
@@ -2202,28 +2224,6 @@ beTriggerDol = (atrMain * breakevenTrigger) * syminfo.pointvalue
 beTriggerHit = useBreakevenProtection and (currentProfitDollars >= beTriggerDol)
 profitTriggerHit = enablePreTP1ProfitLock and (currentProfitDollars >= preTP1TriggerDollars)
 lockKeepPoints = (syminfo.pointvalue > 0 ? (preTP1KeepDollars / syminfo.pointvalue) : 0.0)
-stopCheckLong(stopPrice) =>
-    bool ok = false
-    bool crossed = false
-    float val = na
-    if not na(stopPrice) and stopPrice > 0
-        if stopPrice < close
-            ok := true
-            val := stopPrice
-        else
-            crossed := true
-    [ok, val, crossed]
-stopCheckShort(stopPrice) =>
-    bool ok = false
-    bool crossed = false
-    float val = na
-    if not na(stopPrice) and stopPrice > 0
-        if stopPrice > close
-            ok := true
-            val := stopPrice
-        else
-            crossed := true
-    [ok, val, crossed]
 getExitSLPoints() =>
     float sl = atrMain
     if isMES
