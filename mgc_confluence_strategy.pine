@@ -299,6 +299,28 @@ exitOnReversal = input.bool(true, "Exit On Reversal Signal (institutional protec
 reversalRequiresHullFlip = input.bool(true, "Reversal Requires Hull Flip")
 reversalRequiresEma21Break = input.bool(true, "Reversal Requires EMA21 Break")
 // ==============================
+// 🏛️ INSTITUTIONAL RISK GUARDS
+// ==============================
+group_inst = "🏛️ Institutional Risk Guards"
+enableInstRisk = input.bool(true, "Enable Institutional Risk Guards", group=group_inst)
+maxDailyDrawdownPercent = input.float(1.5, "Max Intraday Drawdown % (peak->valley)", minval=0.2, maxval=5.0, group=group_inst)
+flattenOnDrawdown = input.bool(false, "Flatten On Drawdown Kill (alert)", group=group_inst)
+enableShockGuard = input.bool(true, "Volatility Shock Guard + Cooldown", group=group_inst)
+shockRangeATR = input.float(2.8, "Shock Range (ATR)", minval=1.0, maxval=10.0, group=group_inst)
+shockGapATR = input.float(2.5, "Shock Gap (ATR)", minval=1.0, maxval=10.0, group=group_inst)
+shockCooldownBars = input.int(20, "Cooldown Bars After Shock", minval=0, maxval=500, group=group_inst)
+flattenOnShock = input.bool(false, "Flatten On Shock (alert)", group=group_inst)
+enableMaeExit = input.bool(false, "MAE Emergency Exit (ATR)", group=group_inst)
+maeExitAtrMult = input.float(2.0, "MAE Exit Threshold (ATR)", minval=0.5, maxval=10.0, group=group_inst)
+// ==============================
+// 🏛️ INSTITUTIONAL TRAILING STOP
+// ==============================
+group_trail = "🏛️ Institutional Trailing Stop"
+enableInstTrailing = input.bool(true, "Enable Institutional Trailing Stop", group=group_trail)
+instTrailActivateATR = input.float(2.0, "Trail Activation (ATR)", minval=1.0, maxval=4.0, group=group_trail)
+instTrailDistanceATR = input.float(1.2, "Trail Distance (ATR)", minval=0.5, maxval=3.0, group=group_trail)
+instTrailMinStepTicks = input.int(2, "Min Trail Step (ticks)", minval=0, maxval=20, group=group_trail)
+// ==============================
 // 🔔 TRADERSPOST ALERT SETTINGS
 // ==============================
 enableStrategyOrders = input.bool(true, "Enable Strategy Orders (Backtest)")
@@ -329,12 +351,29 @@ var int cooldownUntilBar = 0
 newDay = ta.change(time("D")) != 0
 if newDay
     dailyRealizedPnL := 0.0
+    dailyPeakPnL := 0.0
     dailyTrades := 0
     lastTradeBar := 0
     consecutiveLosses := 0
     cooldownUntilBar := 0
+    dailyDrawdownKilled := false
+    lastShockBar := na
 maxLossReached = dailyRealizedPnL < -maxDailyLossDollars
 maxTradesReached = dailyTrades >= maxTradesPerDay
+maxDailyDrawdownDollars = guardrailCapital * maxDailyDrawdownPercent / 100.0
+dailyPeakPnL := math.max(dailyPeakPnL, dailyRealizedPnL)
+dailyDrawdown = dailyPeakPnL - dailyRealizedPnL
+drawdownHit = dailyDrawdown >= maxDailyDrawdownDollars
+if enableInstRisk and drawdownHit
+    dailyDrawdownKilled := true
+drawdownKill = enableInstRisk and dailyDrawdownKilled
+shockRange = high - low
+shockGap = math.abs(close - close[1])
+shockDetected = enableInstRisk and enableShockGuard and atr > 0 and ((shockRange > atr * shockRangeATR) or (shockGap > atr * shockGapATR))
+if shockDetected
+    lastShockBar := bar_index
+inShockCooldown = enableInstRisk and enableShockGuard and not na(lastShockBar) and ((bar_index - lastShockBar) <= shockCooldownBars)
+instRiskOK = (not enableInstRisk) or (not drawdownKill and not inShockCooldown)
 // ==============================
 // 📊 VIRTUAL POSITION STATE
 // ==============================
@@ -359,6 +398,14 @@ var float lastTradePnL = na
 var string lastExitReason = ""
 var bool killSwitchPrev = false
 var float atrAtEntry = na
+var float dailyPeakPnL = 0.0
+var bool dailyDrawdownKilled = false
+var int lastShockBar = na
+var bool instTrailActive = false
+var float instTrailStop = na
+var float lastInstTrailStop = na
+var int lastInstExitBar = na
+var bool instExitLatched = false
 barsSinceLastTrade = bar_index - lastTradeBar
 cooldownOK = bar_index >= cooldownUntilBar
 lossStreakOK = consecutiveLosses < maxConsecutiveLosses
@@ -367,7 +414,7 @@ killOK = not killSwitch
 inPos := strategy.position_size != 0
 isLong := strategy.position_size > 0
 qtyRemaining := inPos ? math.abs(strategy.position_size) : 0.0
-canTrade = sessionOK and timeWindowsOK and volatilityOK and killOK and not maxLossReached and not maxTradesReached and (not inPos) and (barsSinceLastTrade >= minBarsBetweenTrades) and cooldownOK and lossStreakOK
+canTrade = sessionOK and timeWindowsOK and volatilityOK and killOK and instRiskOK and not maxLossReached and not maxTradesReached and (not inPos) and (barsSinceLastTrade >= minBarsBetweenTrades) and cooldownOK and lossStreakOK
 // ==============================
 // 🤝 COOPERATIVE SIGNAL QUALITY GATES
 // ==============================
@@ -448,6 +495,10 @@ if barstate.isconfirmed and killTriggered and flattenOnKill and inPos and qtyRem
     tp2_hit := false
     breakeven_active := false
     trailing_active := false
+    instTrailActive := false
+    instTrailStop := na
+    lastInstTrailStop := na
+    instExitLatched := false
     qtyRemaining := 0.0
     qtyOriginal := 0.0
     entryBar := na
@@ -488,6 +539,10 @@ if posOpened
     tp2_hit := false
     breakeven_active := false
     trailing_active := false
+    instTrailActive := false
+    instTrailStop := na
+    lastInstTrailStop := na
+    instExitLatched := false
     // Initial cooperative stop from entry price
     atrStop = (strategy.position_size > 0) ? (entryPrice - (atrAtEntry * initialStopATR)) : (entryPrice + (atrAtEntry * initialStopATR))
     structStop = (strategy.position_size > 0) ? (na(lastPivotLow) ? na : (lastPivotLow - (atrAtEntry * stopStructureBufferATR))) : (na(lastPivotHigh) ? na : (lastPivotHigh + (atrAtEntry * stopStructureBufferATR)))
@@ -506,6 +561,9 @@ if posClosed
     tp2_hit := false
     breakeven_active := false
     trailing_active := false
+    instTrailActive := false
+    instTrailStop := na
+    lastInstTrailStop := na
 // ==============================
 // 🫀 HEARTBEAT / SYNC (OPTIONAL)
 // ==============================
@@ -523,6 +581,57 @@ if inPos and not na(entryPrice)
     maePoints := math.min(maePoints, adverse)
     mfePoints := math.max(mfePoints, favorable)
 // ==============================
+// 🏛️ INSTITUTIONAL EMERGENCY EXITS (ALERT + OPTIONAL CLOSE)
+// ==============================
+maeAtr = (not na(atrAtEntry) and atrAtEntry > 0) ? (math.abs(maePoints) / atrAtEntry) : na
+instExitReason = ""
+instExitTriggered = false
+canInstExit = inPos and not na(entryPrice) and not instExitLatched and (na(lastInstExitBar) or lastInstExitBar != bar_index)
+if canInstExit
+    if enableInstRisk and drawdownKill and flattenOnDrawdown
+        instExitReason := "DD_KILL"
+        instExitTriggered := true
+    else if enableInstRisk and enableShockGuard and flattenOnShock and shockDetected
+        instExitReason := "VOL_SHOCK"
+        instExitTriggered := true
+    else if enableMaeExit and not na(maeAtr) and maeAtr >= maeExitAtrMult
+        instExitReason := "MAE"
+        instExitTriggered := true
+if instExitTriggered
+    if enableAlerts
+        alert(f_json_exit(isLong, qtyRemaining, instExitReason, close), alert.freq_once_per_bar_close)
+    if enableStrategyOrders
+        strategy.close_all(comment=instExitReason)
+    pnlPoints = (close - entryPrice) * (isLong ? 1 : -1)
+    pnlDollars = pnlPoints * syminfo.pointvalue * qtyRemaining
+    dailyRealizedPnL += pnlDollars
+    tradeRealizedPnL += pnlDollars
+    lastTradePnL := tradeRealizedPnL
+    lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
+    lastTradeMFE := mfePoints * syminfo.pointvalue * qtyOriginal
+    lastExitReason := instExitReason
+    consecutiveLosses := tradeRealizedPnL < 0 ? (consecutiveLosses + 1) : 0
+    cooldownUntilBar := bar_index + (tradeRealizedPnL < 0 ? cooldownAfterLossBars : cooldownAfterWinBars)
+    lastTradeBar := bar_index
+    lastInstExitBar := bar_index
+    instExitLatched := true
+    inPos := false
+    entryPrice := na
+    currentStop := na
+    tp1_hit := false
+    tp2_hit := false
+    breakeven_active := false
+    trailing_active := false
+    instTrailActive := false
+    instTrailStop := na
+    lastInstTrailStop := na
+    qtyRemaining := 0.0
+    qtyOriginal := 0.0
+    entryBar := na
+    maePoints := 0.0
+    mfePoints := 0.0
+    tradeRealizedPnL := 0.0
+// ==============================
 // 🛡️ COOPERATIVE STOP MANAGEMENT (MODEL)
 // ==============================
 if useCooperativeStops and inPos and not na(entryPrice)
@@ -536,6 +645,22 @@ if useCooperativeStops and inPos and not na(entryPrice)
     if trailing_active
         trailStop = isLong ? (close - (atr * trailingDistanceATR)) : (close + (atr * trailingDistanceATR))
         currentStop := isLong ? math.max(currentStop, trailStop) : math.min(currentStop, trailStop)
+// ==============================
+// 🏛️ INSTITUTIONAL TRAILING STOP (MODEL)
+// ==============================
+if enableInstTrailing and inPos and not na(entryPrice) and not na(atrAtEntry)
+    instProfit = isLong ? (close - entryPrice) : (entryPrice - close)
+    if not instTrailActive and instProfit >= (atrAtEntry * instTrailActivateATR)
+        instTrailActive := true
+    if instTrailActive
+        instCandidate = isLong ? (close - (atrAtEntry * instTrailDistanceATR)) : (close + (atrAtEntry * instTrailDistanceATR))
+        stepTicks = instTrailMinStepTicks * syminfo.mintick
+        improved = na(lastInstTrailStop) ? true : (isLong ? (instCandidate > lastInstTrailStop + stepTicks) : (instCandidate < lastInstTrailStop - stepTicks))
+        if improved
+            instTrailStop := instCandidate
+            lastInstTrailStop := instCandidate
+        if not na(instTrailStop)
+            currentStop := isLong ? math.max(currentStop, instTrailStop) : math.min(currentStop, instTrailStop)
 // ==============================
 // 🎯 EXITS (TP1/TP2/TP3 + STOP) — ALERT ONLY
 // ==============================
@@ -603,6 +728,9 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
         tp2_hit := false
         breakeven_active := false
         trailing_active := false
+        instTrailActive := false
+        instTrailStop := na
+        lastInstTrailStop := na
         qtyRemaining := 0.0
         qtyOriginal := 0.0
         entryBar := na
@@ -632,6 +760,9 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
             tp2_hit := false
             breakeven_active := false
             trailing_active := false
+            instTrailActive := false
+            instTrailStop := na
+            lastInstTrailStop := na
             qtyRemaining := 0.0
             qtyOriginal := 0.0
             entryBar := na
@@ -690,6 +821,9 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
                 tp2_hit := false
                 breakeven_active := false
                 trailing_active := false
+                instTrailActive := false
+                instTrailStop := na
+                lastInstTrailStop := na
                 qtyRemaining := 0.0
                 qtyOriginal := 0.0
                 entryBar := na
@@ -712,6 +846,9 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
                 tp2_hit := false
                 breakeven_active := false
                 trailing_active := false
+                instTrailActive := false
+                instTrailStop := na
+                lastInstTrailStop := na
                 qtyRemaining := 0.0
                 qtyOriginal := 0.0
                 entryBar := na
