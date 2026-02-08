@@ -40,6 +40,36 @@ scoreDominance = input.int(2, "Min Score Dominance (avoid conflicts)", minval=0,
 avoidOpposingSR = input.bool(true, "Avoid Opposing S/R (directional filter)",
      tooltip="Longs blocked near resistance; shorts blocked near support.")
 // ==============================
+// 🧠 CONFLUENCE LEVEL SYSTEM (15 LEVELS)
+// ==============================
+group_conf = "🧠 Confluence Levels"
+confluenceLevel = input.int(11, "Confluence Level (1-15)", minval=1, maxval=15, group=group_conf,
+     tooltip="Progressive filtering: 1-3 minimal, 4-6 volume, 7-9 momentum+trend, 10-12 session+strict, 13-15 ultra strict.")
+volumeConfirmRatio = input.float(0.6, "Volume Confirm Ratio (x avg)", minval=0.3, maxval=1.5, group=group_conf)
+strongVolumeRatio = input.float(1.2, "Strong Volume Ratio (x avg)", minval=0.8, maxval=3.0, group=group_conf)
+stochLen = input.int(6, "Stochastic Length", minval=3, maxval=20, group=group_conf)
+stochSmoothK = input.int(3, "Stochastic K Smooth", minval=1, maxval=10, group=group_conf)
+stochSmoothD = input.int(3, "Stochastic D Smooth", minval=1, maxval=10, group=group_conf)
+rsiMomentumLongMin = input.int(50, "RSI Momentum Long Min", minval=30, maxval=70, group=group_conf)
+rsiMomentumLongMax = input.int(70, "RSI Momentum Long Max", minval=50, maxval=80, group=group_conf)
+rsiMomentumShortMin = input.int(30, "RSI Momentum Short Min", minval=20, maxval=50, group=group_conf)
+rsiMomentumShortMax = input.int(50, "RSI Momentum Short Max", minval=30, maxval=70, group=group_conf)
+rsiStrongLongMin = input.int(60, "RSI Strong Long Min", minval=40, maxval=90, group=group_conf)
+rsiStrongShortMax = input.int(40, "RSI Strong Short Max", minval=10, maxval=60, group=group_conf)
+stochRangeMin = input.int(25, "Stoch Range Min", minval=5, maxval=50, group=group_conf)
+stochRangeMax = input.int(75, "Stoch Range Max", minval=50, maxval=95, group=group_conf)
+stochStrongLongMin = input.int(70, "Stoch Strong Long Min", minval=55, maxval=95, group=group_conf)
+stochStrongShortMax = input.int(30, "Stoch Strong Short Max", minval=5, maxval=45, group=group_conf)
+atrExpandLen = input.int(20, "ATR Expand Length", minval=5, maxval=100, group=group_conf)
+atrExpandRatio = input.float(1.05, "ATR Expand Ratio", minval=1.0, maxval=2.0, group=group_conf)
+// ==============================
+// 🏆 HIGH WIN RATE MODE (OPTIONAL)
+// ==============================
+group_hw = "🏆 High Win Rate Mode"
+enableHighWinRateMode = input.bool(false, "Enable High Win Rate Mode", group=group_hw)
+quickTpMultiplier = input.float(0.6, "Quick TP Multiplier", minval=0.3, maxval=1.0, group=group_hw)
+widerSlMultiplier = input.float(1.5, "Wider SL Multiplier", minval=1.0, maxval=2.5, group=group_hw)
+// ==============================
 // 🕒 SESSION FILTERS
 // ==============================
 tradingHoursOnly = input.bool(true, "US Trading Hours Only")
@@ -74,6 +104,49 @@ inCustom1 = blockWindow1 and nowMin >= f_hhmm_to_min(window1StartHHMM) and nowMi
 inCustom2 = blockWindow2 and nowMin >= f_hhmm_to_min(window2StartHHMM) and nowMin <= f_hhmm_to_min(window2EndHHMM)
 timeWindowsOK = not (inOpenBlock or inCloseBlock or inLunchBlock or inCustom1 or inCustom2)
 // ==============================
+// 🌍 GLOBAL SESSIONS (24/7)
+// ==============================
+group_session = "🌍 Global Sessions"
+useGlobalSessions = input.bool(true, "Enable Global Sessions", group=group_session)
+sessionTzOffset = input.int(-5, "Timezone Offset from UTC (ET=-5)", minval=-12, maxval=14, group=group_session)
+enableAsianSession = input.bool(true, "Asian Session 19:00-03:00 ET", group=group_session)
+enableLondonSession = input.bool(true, "London Session 03:00-12:00 ET", group=group_session)
+enableNySession = input.bool(false, "NY Session 09:30-16:00 ET", group=group_session)
+enableUaeSession = input.bool(true, "UAE Session 00:00-08:00 ET", group=group_session)
+enablePreMarket = input.bool(false, "US Pre-Market 06:00-09:30 ET", group=group_session)
+enableAfterHours = input.bool(false, "US After-Hours 16:00-17:00 ET", group=group_session)
+enableNoTradeZone = input.bool(true, "No-Trade Zone 00:00-06:00 ET", group=group_session)
+noTradeStartHHMM = input.int(0, "No-Trade Start (HHMM)", minval=0, maxval=2359, group=group_session)
+noTradeEndHHMM = input.int(600, "No-Trade End (HHMM)", minval=0, maxval=2359, group=group_session)
+f_in_window(_startMin, _endMin, _nowMin) =>
+    _startMin <= _endMin ? (_nowMin >= _startMin and _nowMin < _endMin) : (_nowMin >= _startMin or _nowMin < _endMin)
+etHour = (hour + sessionTzOffset + 24) % 24
+etNowMin = etHour * 60 + minute
+asianStart = f_hhmm_to_min(1900)
+asianEnd = f_hhmm_to_min(300)
+londonStart = f_hhmm_to_min(300)
+londonEnd = f_hhmm_to_min(1200)
+nyStart = f_hhmm_to_min(930)
+nyEnd = f_hhmm_to_min(1600)
+uaeStart = f_hhmm_to_min(0)
+uaeEnd = f_hhmm_to_min(800)
+premarketStart = f_hhmm_to_min(600)
+premarketEnd = f_hhmm_to_min(930)
+afterHoursStart = f_hhmm_to_min(1600)
+afterHoursEnd = f_hhmm_to_min(1700)
+inAsian = enableAsianSession and f_in_window(asianStart, asianEnd, etNowMin)
+inLondon = enableLondonSession and f_in_window(londonStart, londonEnd, etNowMin)
+inNy = enableNySession and f_in_window(nyStart, nyEnd, etNowMin)
+inUae = enableUaeSession and f_in_window(uaeStart, uaeEnd, etNowMin)
+inPreMarket = enablePreMarket and f_in_window(premarketStart, premarketEnd, etNowMin)
+inAfterHours = enableAfterHours and f_in_window(afterHoursStart, afterHoursEnd, etNowMin)
+noTradeStartMin = f_hhmm_to_min(noTradeStartHHMM)
+noTradeEndMin = f_hhmm_to_min(noTradeEndHHMM)
+inNoTradeZone = enableNoTradeZone and f_in_window(noTradeStartMin, noTradeEndMin, etNowMin)
+globalSessionOK = not useGlobalSessions or ((inAsian or inLondon or inNy or inUae or inPreMarket or inAfterHours) and not inNoTradeZone)
+sessionFilterOK = useGlobalSessions ? globalSessionOK : sessionOK
+timeWindowFilterOK = useGlobalSessions ? true : timeWindowsOK
+// ==============================
 // 📊 HIGHER TIMEFRAME CONFIRMATION
 // ==============================
 htfTimeframe = input.timeframe("15", "Higher Timeframe",
@@ -95,6 +168,20 @@ mtf_ema50 = request.security(syminfo.tickerid, mtfTimeframe, ta.ema(close, 50))
 mtf_bullish = mtf_close > mtf_ema20 and mtf_ema20 > mtf_ema50
 mtf_bearish = mtf_close < mtf_ema20 and mtf_ema20 < mtf_ema50
 // ==============================
+// 🕰️ MULTI-TIMEFRAME CONFIRMATION (3 HTFs)
+// ==============================
+group_mtf = "🕰️ MTF Confirmation"
+mtfMode = input.string("FILTER", "MTF Mode", options=["FILTER", "CONFIRMATION", "ADVISORY"], group=group_mtf,
+     tooltip="FILTER blocks trades if misaligned. CONFIRMATION/ADVISORY are non-blocking.")
+mtfAlignmentThresholdPct = input.float(66.0, "MTF Alignment Threshold (%)", minval=50.0, maxval=100.0, group=group_mtf)
+htf1_tf = input.timeframe("15", "HTF1 (15m)", group=group_mtf)
+htf2_tf = input.timeframe("60", "HTF2 (60m)", group=group_mtf)
+htf3_tf = input.timeframe("240", "HTF3 (240m)", group=group_mtf)
+enableTrendOverride = input.bool(true, "Trend Override Bypass", group=group_mtf)
+enableImpulseOverride = input.bool(false, "Impulse Override Bypass", group=group_mtf)
+impulseAtrMult = input.float(1.1, "Impulse Candle ATR Mult", minval=0.8, maxval=3.0, group=group_mtf)
+impulseVolumeMult = input.float(1.8, "Impulse Volume Mult", minval=1.0, maxval=5.0, group=group_mtf)
+// ==============================
 // 📈 CORE INDICATORS
 // ==============================
 ema9 = ta.ema(close, 9)
@@ -109,6 +196,13 @@ hma(src, len) =>
     half_length = math.round(len / 2)
     sqrt_length = math.round(math.sqrt(len))
     ta.wma(2 * ta.wma(src, half_length) - ta.wma(src, len), sqrt_length)
+f_percent_rank(_series, _length) =>
+    int len = math.min(_length, bar_index + 1)
+    float count = 0.0
+    for i = 0 to len - 1
+        if _series[i] <= _series
+            count += 1.0
+    len > 0 ? (count / len) * 100.0 : na
 hull = hma(close, hullLen)
 hull_bullish = hull > hull[1] and hull[1] > hull[2]
 hull_bearish = hull < hull[1] and hull[1] < hull[2]
@@ -131,6 +225,9 @@ macd_bullish = macdLine > signalLine and histLine > 0
 macd_bearish = macdLine < signalLine and histLine < 0
 rsi = ta.rsi(close, 14)
 rsi_neutral = rsi > 35 and rsi < 65
+stochRaw = ta.stoch(high, low, close, stochLen)
+stochK = ta.sma(stochRaw, stochSmoothK)
+stochD = ta.sma(stochK, stochSmoothD)
 volumeMA = ta.sma(volume, 20)
 volumeSpike = volume > volumeMA * volumeRatioMin
 atr = ta.atr(14)
@@ -206,6 +303,27 @@ priceMove = close - close[trendLookback]
 trendStrength = priceRange > 0 ? math.abs(priceMove) / priceRange : 0.0
 strongTrendDirection = trendStrength > minTrendStrength
 // ==============================
+// 🔎 7 CONFLUENCE FACTORS
+// ==============================
+volumeConfirm = volume >= volumeMA * volumeConfirmRatio
+strongVolume = volume >= volumeMA * strongVolumeRatio
+rsiLongMinEff = enableHighWinRateMode ? 40 : rsiMomentumLongMin
+rsiLongMaxEff = enableHighWinRateMode ? 65 : rsiMomentumLongMax
+rsiShortMinEff = enableHighWinRateMode ? 35 : rsiMomentumShortMin
+rsiShortMaxEff = enableHighWinRateMode ? 60 : rsiMomentumShortMax
+stochMinEff = enableHighWinRateMode ? 25 : stochRangeMin
+stochMaxEff = enableHighWinRateMode ? 75 : stochRangeMax
+momentumAlignLong = rsi >= rsiLongMinEff and rsi <= rsiLongMaxEff and stochK >= stochMinEff and stochK <= stochMaxEff and stochK > stochD
+momentumAlignShort = rsi >= rsiShortMinEff and rsi <= rsiShortMaxEff and stochK >= stochMinEff and stochK <= stochMaxEff and stochK < stochD
+strongMomentumLong = rsi >= rsiStrongLongMin and stochK >= stochStrongLongMin and stochK > stochD
+strongMomentumShort = rsi <= rsiStrongShortMax and stochK <= stochStrongShortMax and stochK < stochD
+trendModerate = adx >= adxFloorThreshold
+trendStrong = adx >= adxThreshold
+priceActionLong = close > open and close > close[1]
+priceActionShort = close < open and close < close[1]
+atrSma = ta.sma(atr, atrExpandLen)
+atrExpanding = atrSma != 0 ? atr > atrSma * atrExpandRatio : false
+// ==============================
 // 🎯 10-POINT CONFLUENCE SCORING
 // ==============================
 var int confluenceLong = 0
@@ -260,6 +378,84 @@ if strongTrendDirection and close > close[trendLookback]
 if strongTrendDirection and close < close[trendLookback]
     confluenceShort += 1
 // ==============================
+// 🧠 CONFLUENCE LEVEL GATES (15 LEVELS)
+// ==============================
+confluenceTier = confluenceLevel <= 3 ? 1 : confluenceLevel <= 6 ? 2 : confluenceLevel <= 9 ? 3 : confluenceLevel <= 12 ? 4 : 5
+confluenceLevelOKLong =
+     confluenceTier == 1 ? true :
+     confluenceTier == 2 ? volumeConfirm :
+     confluenceTier == 3 ? (volumeConfirm and momentumAlignLong and trendModerate) :
+     confluenceTier == 4 ? (volumeConfirm and strongVolume and momentumAlignLong and trendModerate and priceActionLong and atrExpanding and sessionFilterOK) :
+     (strongVolume and momentumAlignLong and strongMomentumLong and trendStrong and priceActionLong and atrExpanding and sessionFilterOK)
+confluenceLevelOKShort =
+     confluenceTier == 1 ? true :
+     confluenceTier == 2 ? volumeConfirm :
+     confluenceTier == 3 ? (volumeConfirm and momentumAlignShort and trendModerate) :
+     confluenceTier == 4 ? (volumeConfirm and strongVolume and momentumAlignShort and trendModerate and priceActionShort and atrExpanding and sessionFilterOK) :
+     (strongVolume and momentumAlignShort and strongMomentumShort and trendStrong and priceActionShort and atrExpanding and sessionFilterOK)
+// ==============================
+// 🕰️ MTF ALIGNMENT CHECKS (3 HTFs)
+// ==============================
+mtfEmaFast1 = request.security(syminfo.tickerid, htf1_tf, ta.ema(close, 20))
+mtfEmaSlow1 = request.security(syminfo.tickerid, htf1_tf, ta.ema(close, 50))
+mtfEmaFast2 = request.security(syminfo.tickerid, htf2_tf, ta.ema(close, 20))
+mtfEmaSlow2 = request.security(syminfo.tickerid, htf2_tf, ta.ema(close, 50))
+mtfEmaFast3 = request.security(syminfo.tickerid, htf3_tf, ta.ema(close, 20))
+mtfEmaSlow3 = request.security(syminfo.tickerid, htf3_tf, ta.ema(close, 50))
+mtfHull1 = request.security(syminfo.tickerid, htf1_tf, hma(close, hullLen))
+mtfHull2 = request.security(syminfo.tickerid, htf2_tf, hma(close, hullLen))
+mtfHull3 = request.security(syminfo.tickerid, htf3_tf, hma(close, hullLen))
+mtfRsi1 = request.security(syminfo.tickerid, htf1_tf, ta.rsi(close, 14))
+mtfRsi2 = request.security(syminfo.tickerid, htf2_tf, ta.rsi(close, 14))
+mtfRsi3 = request.security(syminfo.tickerid, htf3_tf, ta.rsi(close, 14))
+mtfVol1 = request.security(syminfo.tickerid, htf1_tf, volume)
+mtfVol2 = request.security(syminfo.tickerid, htf2_tf, volume)
+mtfVol3 = request.security(syminfo.tickerid, htf3_tf, volume)
+mtfVolMa1 = request.security(syminfo.tickerid, htf1_tf, ta.sma(volume, 20))
+mtfVolMa2 = request.security(syminfo.tickerid, htf2_tf, ta.sma(volume, 20))
+mtfVolMa3 = request.security(syminfo.tickerid, htf3_tf, ta.sma(volume, 20))
+mtfTrendLong1 = mtfEmaFast1 > mtfEmaSlow1
+mtfTrendShort1 = mtfEmaFast1 < mtfEmaSlow1
+mtfTrendLong2 = mtfEmaFast2 > mtfEmaSlow2
+mtfTrendShort2 = mtfEmaFast2 < mtfEmaSlow2
+mtfTrendLong3 = mtfEmaFast3 > mtfEmaSlow3
+mtfTrendShort3 = mtfEmaFast3 < mtfEmaSlow3
+mtfHullLong1 = mtfHull1 > mtfHull1[1]
+mtfHullShort1 = mtfHull1 < mtfHull1[1]
+mtfHullLong2 = mtfHull2 > mtfHull2[1]
+mtfHullShort2 = mtfHull2 < mtfHull2[1]
+mtfHullLong3 = mtfHull3 > mtfHull3[1]
+mtfHullShort3 = mtfHull3 < mtfHull3[1]
+mtfRsiLong1 = mtfRsi1 >= rsiLongMinEff and mtfRsi1 <= rsiLongMaxEff
+mtfRsiShort1 = mtfRsi1 <= rsiShortMaxEff and mtfRsi1 >= rsiShortMinEff
+mtfRsiLong2 = mtfRsi2 >= rsiLongMinEff and mtfRsi2 <= rsiLongMaxEff
+mtfRsiShort2 = mtfRsi2 <= rsiShortMaxEff and mtfRsi2 >= rsiShortMinEff
+mtfRsiLong3 = mtfRsi3 >= rsiLongMinEff and mtfRsi3 <= rsiLongMaxEff
+mtfRsiShort3 = mtfRsi3 <= rsiShortMaxEff and mtfRsi3 >= rsiShortMinEff
+mtfVolOk1 = mtfVol1 >= mtfVolMa1 * volumeConfirmRatio
+mtfVolOk2 = mtfVol2 >= mtfVolMa2 * volumeConfirmRatio
+mtfVolOk3 = mtfVol3 >= mtfVolMa3 * volumeConfirmRatio
+mtfAlignedCountLong = (mtfTrendLong1 ? 1 : 0) + (mtfTrendLong2 ? 1 : 0) + (mtfTrendLong3 ? 1 : 0) +
+     (mtfHullLong1 ? 1 : 0) + (mtfHullLong2 ? 1 : 0) + (mtfHullLong3 ? 1 : 0) +
+     (mtfRsiLong1 ? 1 : 0) + (mtfRsiLong2 ? 1 : 0) + (mtfRsiLong3 ? 1 : 0) +
+     (mtfVolOk1 ? 1 : 0) + (mtfVolOk2 ? 1 : 0) + (mtfVolOk3 ? 1 : 0)
+mtfAlignedCountShort = (mtfTrendShort1 ? 1 : 0) + (mtfTrendShort2 ? 1 : 0) + (mtfTrendShort3 ? 1 : 0) +
+     (mtfHullShort1 ? 1 : 0) + (mtfHullShort2 ? 1 : 0) + (mtfHullShort3 ? 1 : 0) +
+     (mtfRsiShort1 ? 1 : 0) + (mtfRsiShort2 ? 1 : 0) + (mtfRsiShort3 ? 1 : 0) +
+     (mtfVolOk1 ? 1 : 0) + (mtfVolOk2 ? 1 : 0) + (mtfVolOk3 ? 1 : 0)
+mtfTotalChecks = 12.0
+mtfAlignPctLong = (mtfAlignedCountLong / mtfTotalChecks) * 100.0
+mtfAlignPctShort = (mtfAlignedCountShort / mtfTotalChecks) * 100.0
+mtfAlignedLong = mtfAlignPctLong >= mtfAlignmentThresholdPct
+mtfAlignedShort = mtfAlignPctShort >= mtfAlignmentThresholdPct
+impulseLong = enableImpulseOverride and (close > open) and (math.abs(close - open) >= atr * impulseAtrMult) and (volume >= volumeMA * impulseVolumeMult)
+impulseShort = enableImpulseOverride and (close < open) and (math.abs(close - open) >= atr * impulseAtrMult) and (volume >= volumeMA * impulseVolumeMult)
+trendOverrideLong = enableTrendOverride and strongTrend and ema_bullish_aligned and hull_bullish
+trendOverrideShort = enableTrendOverride and strongTrend and ema_bearish_aligned and hull_bearish
+mtfFilterEnabled = mtfMode == "FILTER"
+mtfFilterOKLong = (not mtfFilterEnabled) or mtfAlignedLong or impulseLong or trendOverrideLong
+mtfFilterOKShort = (not mtfFilterEnabled) or mtfAlignedShort or impulseShort or trendOverrideShort
+// ==============================
 // 🛡️ COOPERATIVE STOPS + TPS
 // ==============================
 useCooperativeStops = input.bool(true, "Use Cooperative Stop System")
@@ -280,6 +476,10 @@ minStopDistanceATR = input.float(0.8, "Min Stop Distance (ATR)", minval=0.3, max
      tooltip="Prevents ultra-tight stops that conflict with volatility.")
 maxStopDistanceATR = input.float(2.5, "Max Stop Distance (ATR)", minval=1.0, maxval=5.0,
      tooltip="Prevents overly-wide stops that reduce trade quality.")
+initialStopATR_eff = enableHighWinRateMode ? (initialStopATR * widerSlMultiplier) : initialStopATR
+tp1_ATR_eff = enableHighWinRateMode ? (tp1_ATR * quickTpMultiplier) : tp1_ATR
+tp2_ATR_eff = enableHighWinRateMode ? (tp2_ATR * quickTpMultiplier) : tp2_ATR
+tp3_ATR_eff = enableHighWinRateMode ? (tp3_ATR * quickTpMultiplier) : tp3_ATR
 // ==============================
 // 📈 RISK + SIZING (VIRTUAL GUARDRAILS)
 // ==============================
@@ -323,6 +523,56 @@ instTrailActivateATR = input.float(2.0, "Trail Activation (ATR)", minval=1.0, ma
 instTrailDistanceATR = input.float(1.2, "Trail Distance (ATR)", minval=0.5, maxval=3.0, group=group_trail)
 instTrailMinStepTicks = input.int(2, "Min Trail Step (ticks)", minval=0, maxval=20, group=group_trail)
 // ==============================
+// 🛡️ ENTRY FILTERS + CONTROLS
+// ==============================
+group_entry = "🛡️ Entry Filters"
+enableAdxFloor = input.bool(true, "ADX Floor Protection", group=group_entry)
+adxFloorThreshold = input.float(20.0, "ADX Floor Threshold", minval=5.0, maxval=40.0, group=group_entry)
+enableStopLossCooldown = input.bool(true, "Cooldown After Stop Loss", group=group_entry)
+stopLossCooldownBars = input.int(10, "Stop Loss Cooldown Bars", minval=0, maxval=200, group=group_entry)
+enableAtrPercentileGate = input.bool(true, "ATR Percentile Gate", group=group_entry)
+atrPercentileLookback = input.int(100, "ATR Percentile Lookback", minval=20, maxval=300, group=group_entry)
+atrPercentileMin = input.float(15.0, "ATR Percentile Min %", minval=0.0, maxval=50.0, group=group_entry)
+atrPercentileMax = input.float(95.0, "ATR Percentile Max %", minval=50.0, maxval=100.0, group=group_entry)
+enableTwoBarConfirm = input.bool(true, "Two-Bar Confirmation", group=group_entry)
+enableEntryDedupe = input.bool(true, "Duplicate Entry Prevention", group=group_entry)
+dedupeBars = input.int(3, "Dedupe Window (bars)", minval=1, maxval=20, group=group_entry)
+enableGapProtection = input.bool(true, "Gap Protection", group=group_entry)
+maxEntryGapPct = input.float(2.0, "Max Gap % From Prev Close", minval=0.5, maxval=10.0, group=group_entry)
+enableRegimeFilter = input.bool(false, "Market Regime Filter", group=group_entry)
+strongTrendPct = input.float(15.0, "Strong Trend %", minval=5.0, maxval=40.0, group=group_entry)
+rangingTrendPct = input.float(8.0, "Ranging Trend %", minval=2.0, maxval=20.0, group=group_entry)
+enableCandleDirection = input.bool(true, "Strict Candle Direction Control", group=group_entry)
+minBodyAtrPct = input.float(0.2, "Min Candle Body % of ATR", minval=0.05, maxval=1.0, group=group_entry)
+enableSlippageGuard = input.bool(true, "Slippage Protection", group=group_entry)
+maxSlippageTicks = input.int(6, "Max Slippage (ticks)", minval=0, maxval=50, group=group_entry)
+// ==============================
+// 🧯 EXIT HIERARCHY (OPTION B)
+// ==============================
+group_exit = "🧯 Exit Hierarchy"
+enableExitHierarchy = input.bool(true, "Enable Exit Hierarchy", group=group_exit)
+maeProfitDrawdownPct = input.float(20.0, "MAE Drawdown % From Peak Profit", minval=5.0, maxval=50.0, group=group_exit)
+maeMinBars = input.int(3, "MAE Min Bars In Trade", minval=0, maxval=50, group=group_exit)
+highWrDrawdownMult = input.float(0.7, "High WR Drawdown Mult", minval=0.4, maxval=1.0, group=group_exit)
+breakevenProfitDollars = input.float(40.0, "Breakeven Profit Trigger ($)", minval=0.0, maxval=500.0, group=group_exit)
+breakevenAtrTrigger = input.float(1.5, "Breakeven Trigger (ATR)", minval=0.5, maxval=5.0, group=group_exit)
+breakevenAtrHighWrMult = input.float(0.5, "High WR Breakeven ATR Mult", minval=0.2, maxval=1.0, group=group_exit)
+breakevenFeeDollars = input.float(0.74, "Breakeven Fee Buffer ($)", minval=0.0, maxval=10.0, group=group_exit)
+enableProfitLocks = input.bool(true, "Enable Profit Lock Stops", group=group_exit)
+lock1Atr = input.float(2.0, "Lock Level 1 (ATR)", minval=0.5, maxval=5.0, group=group_exit)
+lock1Pct = input.float(0.50, "Lock Level 1 %", minval=0.1, maxval=0.9, group=group_exit)
+lock2Atr = input.float(3.5, "Lock Level 2 (ATR)", minval=1.0, maxval=8.0, group=group_exit)
+lock2Pct = input.float(0.60, "Lock Level 2 %", minval=0.1, maxval=0.9, group=group_exit)
+lock3Atr = input.float(5.0, "Lock Level 3 (ATR)", minval=1.0, maxval=10.0, group=group_exit)
+lock3Pct = input.float(0.70, "Lock Level 3 %", minval=0.1, maxval=0.95, group=group_exit)
+maxProfitDrawdownPct = input.float(20.0, "Max Profit Drawdown %", minval=5.0, maxval=80.0, group=group_exit)
+timeProfitBars = input.int(15, "Time-Based Profit Bars", minval=1, maxval=500, group=group_exit)
+timeProfitDrawdownAtr = input.float(0.5, "Time Profit Stall (ATR)", minval=0.1, maxval=3.0, group=group_exit)
+losingTradePct = input.float(1.0, "Losing Trade Auto-Close %", minval=0.2, maxval=10.0, group=group_exit)
+enableSignalReversalExit = input.bool(true, "Signal Reversal Exit", group=group_exit)
+signalReversalBars = input.int(3, "Reversal Min Bars", minval=1, maxval=20, group=group_exit)
+breakevenTriggerATR_eff = enableHighWinRateMode ? (breakevenTriggerATR * breakevenAtrHighWrMult) : breakevenTriggerATR
+// ==============================
 // 🔔 TRADERSPOST ALERT SETTINGS
 // ==============================
 enableStrategyOrders = input.bool(true, "Enable Strategy Orders (Backtest)")
@@ -360,6 +610,10 @@ if newDay
     cooldownUntilBar := 0
     dailyDrawdownKilled := false
     lastShockBar := na
+    lastEntryBarLong := na
+    lastEntryBarShort := na
+    lastStopBarLong := na
+    lastStopBarShort := na
 maxLossReached = dailyRealizedPnL < -maxDailyLossDollars
 maxTradesReached = dailyTrades >= maxTradesPerDay
 maxDailyDrawdownDollars = guardrailCapital * maxDailyDrawdownPercent / 100.0
@@ -390,6 +644,10 @@ var bool trailing_active = false
 var float qtyRemaining = 0.0
 var float qtyOriginal = 0.0
 var int entryBar = na
+var int lastEntryBarLong = na
+var int lastEntryBarShort = na
+var int lastStopBarLong = na
+var int lastStopBarShort = na
 // MAE/MFE and per-trade realized PnL (virtual)
 var float maePoints = 0.0
 var float mfePoints = 0.0
@@ -419,14 +677,38 @@ killOK = not killSwitch
 inPos := strategy.position_size != 0
 isLong := strategy.position_size > 0
 qtyRemaining := inPos ? math.abs(strategy.position_size) : 0.0
-canTrade = sessionOK and timeWindowsOK and volatilityOK and killOK and instRiskOK and not maxLossReached and not maxTradesReached and (not inPos) and (barsSinceLastTrade >= minBarsBetweenTrades) and cooldownOK and lossStreakOK
+canTrade = sessionFilterOK and timeWindowFilterOK and volatilityOK and killOK and instRiskOK and not maxLossReached and not maxTradesReached and (not inPos) and (barsSinceLastTrade >= minBarsBetweenTrades) and cooldownOK and lossStreakOK
+adxFloorOK = (not enableAdxFloor) or adx >= adxFloorThreshold
+atrPercentile = f_percent_rank(atr, atrPercentileLookback)
+atrPercentileOK = (not enableAtrPercentileGate) or (not na(atrPercentile) and atrPercentile >= atrPercentileMin and atrPercentile <= atrPercentileMax)
+twoBarUp = close > close[1] and close[1] > close[2]
+twoBarDown = close < close[1] and close[1] < close[2]
+twoBarOKLong = (not enableTwoBarConfirm) or twoBarUp
+twoBarOKShort = (not enableTwoBarConfirm) or twoBarDown
+gapPct = (not na(close[1]) and close[1] != 0) ? math.abs(open - close[1]) / close[1] * 100.0 : 0.0
+gapOK = (not enableGapProtection) or gapPct <= maxEntryGapPct
+slippageOK = (not enableSlippageGuard) or ((high - low) <= maxSlippageTicks * syminfo.mintick)
+bodySize = math.abs(close - open)
+bodyPctAtr = atr > 0 ? bodySize / atr : 0.0
+candleDirLong = close > open and bodyPctAtr >= minBodyAtrPct
+candleDirShort = close < open and bodyPctAtr >= minBodyAtrPct
+candleOKLong = (not enableCandleDirection) or candleDirLong or impulseLong
+candleOKShort = (not enableCandleDirection) or candleDirShort or impulseShort
+dedupeOKLong = (not enableEntryDedupe) or na(lastEntryBarLong) or (bar_index - lastEntryBarLong > dedupeBars)
+dedupeOKShort = (not enableEntryDedupe) or na(lastEntryBarShort) or (bar_index - lastEntryBarShort > dedupeBars)
+stopCooldownOKLong = (not enableStopLossCooldown) or na(lastStopBarLong) or (bar_index - lastStopBarLong > stopLossCooldownBars)
+stopCooldownOKShort = (not enableStopLossCooldown) or na(lastStopBarShort) or (bar_index - lastStopBarShort > stopLossCooldownBars)
+trendStrengthPct = trendStrength * 100.0
+regimeStrong = trendStrengthPct >= strongTrendPct
+regimeRanging = trendStrengthPct < rangingTrendPct
+marketRegimeOK = (not enableRegimeFilter) or (not regimeRanging)
 // ==============================
 // 🤝 COOPERATIVE SIGNAL QUALITY GATES
 // ==============================
 atrValid = atr > 0
 entryCandidate = close
-atrStopLong = entryCandidate - (atr * initialStopATR)
-atrStopShort = entryCandidate + (atr * initialStopATR)
+atrStopLong = entryCandidate - (atr * initialStopATR_eff)
+atrStopShort = entryCandidate + (atr * initialStopATR_eff)
 structStopLong = na(lastPivotLow) ? na : (lastPivotLow - (atr * stopStructureBufferATR))
 structStopShort = na(lastPivotHigh) ? na : (lastPivotHigh + (atr * stopStructureBufferATR))
 // For long: lower stop is "further away" (safer). For short: higher stop is "further away".
@@ -446,8 +728,10 @@ htfOKLong = not requireHtfAlignment or htf_bullish
 htfOKShort = not requireHtfAlignment or htf_bearish
 mtfOKLong = (not useMtfConfirmation) or mtf_bullish
 mtfOKShort = (not useMtfConfirmation) or mtf_bearish
-longSignal = canTrade and stopOKLong and srOKLong and htfOKLong and mtfOKLong and (not bothDirectionsHot) and dominantLong and confluenceLong >= minConfluenceScore
-shortSignal = canTrade and stopOKShort and srOKShort and htfOKShort and mtfOKShort and (not bothDirectionsHot) and dominantShort and confluenceShort >= minConfluenceScore
+entryFiltersLong = (adxFloorOK and atrPercentileOK and twoBarOKLong and gapOK and slippageOK and candleOKLong and dedupeOKLong and stopCooldownOKLong and marketRegimeOK and confluenceLevelOKLong and mtfFilterOKLong) or impulseLong
+entryFiltersShort = (adxFloorOK and atrPercentileOK and twoBarOKShort and gapOK and slippageOK and candleOKShort and dedupeOKShort and stopCooldownOKShort and marketRegimeOK and confluenceLevelOKShort and mtfFilterOKShort) or impulseShort
+longSignal = canTrade and entryFiltersLong and stopOKLong and srOKLong and htfOKLong and mtfOKLong and (not bothDirectionsHot) and dominantLong and confluenceLong >= minConfluenceScore
+shortSignal = canTrade and entryFiltersShort and stopOKShort and srOKShort and htfOKShort and mtfOKShort and (not bothDirectionsHot) and dominantShort and confluenceShort >= minConfluenceScore
 // ==============================
 // 🔧 JSON HELPERS
 // ==============================
@@ -504,6 +788,8 @@ if barstate.isconfirmed and killTriggered and flattenOnKill and inPos and qtyRem
     instTrailStop := na
     lastInstTrailStop := na
     instExitLatched := false
+    peakPriceSinceEntry := na
+    troughPriceSinceEntry := na
     qtyRemaining := 0.0
     qtyOriginal := 0.0
     entryBar := na
@@ -521,13 +807,17 @@ if barstate.isconfirmed
         if longSignal and fixedContracts > 0
             modeledEntry = close
             modeledStop = stopCandidateLong
-            modeledTp1 = modeledEntry + (atr * tp1_ATR)
+            modeledTp1 = modeledEntry + (atr * tp1_ATR_eff)
             alert(f_json_entry(true, fixedContracts, modeledStop, modeledTp1, confluenceLong), alert.freq_once_per_bar_close)
         if shortSignal and fixedContracts > 0
             modeledEntry = close
             modeledStop = stopCandidateShort
-            modeledTp1 = modeledEntry - (atr * tp1_ATR)
+            modeledTp1 = modeledEntry - (atr * tp1_ATR_eff)
             alert(f_json_entry(false, fixedContracts, modeledStop, modeledTp1, confluenceShort), alert.freq_once_per_bar_close)
+    if longSignal and fixedContracts > 0
+        lastEntryBarLong := bar_index
+    if shortSignal and fixedContracts > 0
+        lastEntryBarShort := bar_index
 // Sync internal state to actual strategy position (entry/flat)
 posOpened = strategy.position_size != 0 and strategy.position_size[1] == 0
 posClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
@@ -551,7 +841,7 @@ if posOpened
     peakPriceSinceEntry := high
     troughPriceSinceEntry := low
     // Initial cooperative stop from entry price
-    atrStop = (strategy.position_size > 0) ? (entryPrice - (atrAtEntry * initialStopATR)) : (entryPrice + (atrAtEntry * initialStopATR))
+    atrStop = (strategy.position_size > 0) ? (entryPrice - (atrAtEntry * initialStopATR_eff)) : (entryPrice + (atrAtEntry * initialStopATR_eff))
     structStop = (strategy.position_size > 0) ? (na(lastPivotLow) ? na : (lastPivotLow - (atrAtEntry * stopStructureBufferATR))) : (na(lastPivotHigh) ? na : (lastPivotHigh + (atrAtEntry * stopStructureBufferATR)))
     currentStop := na(structStop) ? atrStop : ((strategy.position_size > 0) ? math.min(atrStop, structStop) : math.max(atrStop, structStop))
     dailyTrades += 1
@@ -597,6 +887,11 @@ if inPos and not na(entryPrice)
         maeDrawdownPct := troughPriceSinceEntry > 0 ? ((close - troughPriceSinceEntry) / troughPriceSinceEntry) * 100.0 : na
 else
     maeDrawdownPct := na
+barsInTrade = not na(entryBar) ? (bar_index - entryBar) : 0
+currentProfitPts = inPos and not na(entryPrice) ? (isLong ? (close - entryPrice) : (entryPrice - close)) : 0.0
+currentProfitDollars = currentProfitPts * syminfo.pointvalue * qtyRemaining
+peakProfitPts = mfePoints
+profitDrawdownPct = peakProfitPts > 0 ? math.max(((peakProfitPts - currentProfitPts) / peakProfitPts) * 100.0, 0.0) : 0.0
 // ==============================
 // 🏛️ INSTITUTIONAL EMERGENCY EXITS (ALERT + OPTIONAL CLOSE)
 // ==============================
@@ -605,7 +900,24 @@ instExitReason = ""
 instExitTriggered = false
 canInstExit = inPos and not na(entryPrice) and not instExitLatched and (na(lastInstExitBar) or lastInstExitBar != bar_index)
 if canInstExit
-    if enableInstRisk and drawdownKill and flattenOnDrawdown
+    maeProfitDrawdownEff = enableHighWinRateMode ? (maeProfitDrawdownPct * highWrDrawdownMult) : maeProfitDrawdownPct
+    maePctEffective = enableHighWinRateMode ? (maePctDrawdown * highWrDrawdownMult) : maePctDrawdown
+    if enableExitHierarchy and (barsInTrade >= maeMinBars) and peakProfitPts > 0 and profitDrawdownPct >= maeProfitDrawdownEff
+        instExitReason := "MAE_PROFIT"
+        instExitTriggered := true
+    else if enableExitHierarchy and peakProfitPts > 0 and (profitDrawdownPct >= maxProfitDrawdownPct)
+        instExitReason := "MAX_DRAWDOWN"
+        instExitTriggered := true
+    else if enableExitHierarchy and not na(atrAtEntry) and (barsInTrade >= timeProfitBars) and (currentProfitPts > 0) and (peakProfitPts - currentProfitPts >= atrAtEntry * timeProfitDrawdownAtr)
+        instExitReason := "TIME_PROTECT"
+        instExitTriggered := true
+    else if enableExitHierarchy and (entryPrice > 0) and ((currentProfitPts / entryPrice) * 100.0 <= -losingTradePct)
+        instExitReason := "LOSS_CUT"
+        instExitTriggered := true
+    else if enableExitHierarchy and enableSignalReversalExit and (barsInTrade >= signalReversalBars) and ((isLong and dominantShort and confluenceShort >= minConfluenceScore) or (not isLong and dominantLong and confluenceLong >= minConfluenceScore))
+        instExitReason := "REVERSAL"
+        instExitTriggered := true
+    else if enableInstRisk and drawdownKill and flattenOnDrawdown
         instExitReason := "DD_KILL"
         instExitTriggered := true
     else if enableInstRisk and enableShockGuard and flattenOnShock and shockDetected
@@ -614,7 +926,7 @@ if canInstExit
     else if enableMaeExit and not na(maeAtr) and maeAtr >= maeExitAtrMult
         instExitReason := "MAE"
         instExitTriggered := true
-    else if enableMaePctExit and not na(maeDrawdownPct) and maeDrawdownPct >= maePctDrawdown
+    else if enableMaePctExit and not na(maeDrawdownPct) and maeDrawdownPct >= maePctEffective
         instExitReason := "MAE_PCT"
         instExitTriggered := true
 if instExitTriggered
@@ -658,7 +970,7 @@ if instExitTriggered
 // ==============================
 if useCooperativeStops and inPos and not na(entryPrice)
     currentProfit = isLong ? (close - entryPrice) : (entryPrice - close)
-    if not breakeven_active and currentProfit >= atr * breakevenTriggerATR
+    if not breakeven_active and currentProfit >= atr * breakevenTriggerATR_eff
         breakeven_active := true
         beStop = isLong ? (entryPrice + (2 * syminfo.mintick)) : (entryPrice - (2 * syminfo.mintick))
         currentStop := isLong ? math.max(currentStop, beStop) : math.min(currentStop, beStop)
@@ -667,6 +979,27 @@ if useCooperativeStops and inPos and not na(entryPrice)
     if trailing_active
         trailStop = isLong ? (close - (atr * trailingDistanceATR)) : (close + (atr * trailingDistanceATR))
         currentStop := isLong ? math.max(currentStop, trailStop) : math.min(currentStop, trailStop)
+// ==============================
+// 🧯 EXIT HIERARCHY: BREAKEVEN + PROFIT LOCKS
+// ==============================
+if enableExitHierarchy and inPos and not na(entryPrice) and not na(atrAtEntry)
+    beAtrTrigger = enableHighWinRateMode ? (breakevenAtrTrigger * breakevenAtrHighWrMult) : breakevenAtrTrigger
+    beHit = (currentProfitPts >= atrAtEntry * beAtrTrigger) or (breakevenProfitDollars > 0 and currentProfitDollars >= breakevenProfitDollars)
+    feeBufferPts = syminfo.pointvalue != 0 ? (breakevenFeeDollars / syminfo.pointvalue) : 0.0
+    beStopPrice = isLong ? (entryPrice + feeBufferPts) : (entryPrice - feeBufferPts)
+    if beHit
+        currentStop := isLong ? math.max(currentStop, beStopPrice) : math.min(currentStop, beStopPrice)
+    if enableProfitLocks
+        lockPct = na
+        if currentProfitPts >= atrAtEntry * lock3Atr
+            lockPct := lock3Pct
+        else if currentProfitPts >= atrAtEntry * lock2Atr
+            lockPct := lock2Pct
+        else if currentProfitPts >= atrAtEntry * lock1Atr
+            lockPct := lock1Pct
+        if not na(lockPct)
+            lockStop = isLong ? (entryPrice + (currentProfitPts * lockPct)) : (entryPrice - (currentProfitPts * lockPct))
+            currentStop := isLong ? math.max(currentStop, lockStop) : math.min(currentStop, lockStop)
 // ==============================
 // 🏛️ INSTITUTIONAL TRAILING STOP (MODEL)
 // ==============================
@@ -687,9 +1020,9 @@ if enableInstTrailing and inPos and not na(entryPrice) and not na(atrAtEntry)
 // 🎯 EXITS (TP1/TP2/TP3 + STOP) — ALERT ONLY
 // ==============================
 // Use entry ATR for fixed targets (more stable)
-tp1_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp1_ATR) : entryPrice - (atrAtEntry * tp1_ATR)) : na
-tp2_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp2_ATR) : entryPrice - (atrAtEntry * tp2_ATR)) : na
-tp3_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp3_ATR) : entryPrice - (atrAtEntry * tp3_ATR)) : na
+tp1_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp1_ATR_eff) : entryPrice - (atrAtEntry * tp1_ATR_eff)) : na
+tp2_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp2_ATR_eff) : entryPrice - (atrAtEntry * tp2_ATR_eff)) : na
+tp3_price = inPos and not na(entryPrice) ? (isLong ? entryPrice + (atrAtEntry * tp3_ATR_eff) : entryPrice - (atrAtEntry * tp3_ATR_eff)) : na
 // Strategy exits (backtest)
 if enableStrategyOrders and inPos and not na(entryPrice) and barstate.isconfirmed
     // Convert TP2 percent-of-remaining into absolute percent of original position.
@@ -734,6 +1067,10 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
         pnlDollars = pnlPoints * syminfo.pointvalue * qtyRemaining
         dailyRealizedPnL += pnlDollars
         tradeRealizedPnL += pnlDollars
+        if isLong
+            lastStopBarLong := bar_index
+        else
+            lastStopBarShort := bar_index
         // finalize trade stats / risk state
         lastTradePnL := tradeRealizedPnL
         lastTradeMAE := maePoints * syminfo.pointvalue * qtyOriginal
@@ -903,7 +1240,7 @@ if barstate.isconfirmed
     table.cell(perfTable, 0, 4, "ADX", text_color=color.white)
     table.cell(perfTable, 1, 4, str.tostring(adx, "#.#"), text_color=adx >= adxThreshold ? color.lime : color.gray)
     table.cell(perfTable, 0, 5, "Session", text_color=color.white)
-    table.cell(perfTable, 1, 5, sessionOK ? "OK" : "OFF", text_color=sessionOK ? color.lime : color.red)
+    table.cell(perfTable, 1, 5, sessionFilterOK ? "OK" : "OFF", text_color=sessionFilterOK ? color.lime : color.red)
     table.cell(perfTable, 0, 6, "Position", text_color=color.white)
     table.cell(perfTable, 1, 6, inPos ? (isLong ? "LONG" : "SHORT") : "FLAT", text_color=inPos ? color.yellow : color.gray)
     table.cell(perfTable, 0, 7, "Stop Mode", text_color=color.white)
@@ -930,6 +1267,6 @@ plot(hull, "Hull MA", color=hull_bullish ? color.green : hull_bearish ? color.re
 plot(inPos ? currentStop : na, "Stop (model)", color=breakeven_active ? color.yellow : trailing_active ? color.aqua : color.red, linewidth=2, style=plot.style_cross)
 plotshape(longSignal, "Long Signal", shape.triangleup, location.belowbar, color=color.green, size=size.tiny, text="L " + str.tostring(confluenceLong))
 plotshape(shortSignal, "Short Signal", shape.triangledown, location.abovebar, color=color.red, size=size.tiny, text="S " + str.tostring(confluenceShort))
-bgcolor(not sessionOK ? color.new(color.red, 92) : na)
+bgcolor(not sessionFilterOK ? color.new(color.red, 92) : na)
 bgcolor(maxLossReached ? color.new(color.red, 88) : na)
 bgcolor(maxTradesReached ? color.new(color.orange, 92) : na)
