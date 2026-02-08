@@ -388,6 +388,10 @@ mtf_tf1 = input.timeframe("15", "V8: MTF 1")
 mtf_tf2 = input.timeframe("60", "V8: MTF 2")
 mtf_tf3 = input.timeframe("240", "V8: MTF 3")
 mtfAlignThreshold = input.int(50, "V8: MTF Alignment % Threshold", minval=0, maxval=100)
+hierBiasGroup = "🧭 Hierarchical MTF Bias (10m)"
+enableHierarchicalBias = input.bool(true, "Enable 10m bias filter (30m + 4h)", group=hierBiasGroup)
+hierBiasTfSetup = input.timeframe("30", "Bias TF (setup)", group=hierBiasGroup)
+hierBiasTfTrend = input.timeframe("240", "Bias TF (trend)", group=hierBiasGroup)
 mnqMtfStrictTF = isMNQ and (timeframe.period == "3" or timeframe.period == "5")
 mtfAlignThreshold_eff =
      mnqMtfStrictTF ? math.max(mtfAlignThreshold, 67) : mtfAlignThreshold
@@ -1113,6 +1117,12 @@ mtf15_Short = request.security(syminfo.tickerid, "15", close < ta.sma(close, mtf
 mtf60_Short = request.security(syminfo.tickerid, "60", close < ta.sma(close, mtfStrictSmaLen), barmerge.gaps_off, barmerge.lookahead_off)
 mtfStrictLongOK = (not mtfStrictApplies) or (mtf15_Long and mtf60_Long)
 mtfStrictShortOK = (not mtfStrictApplies) or (mtf15_Short and mtf60_Short)
+hierBiasLongSetup = request.security(syminfo.tickerid, hierBiasTfSetup, close > ta.ema(close, htfEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+hierBiasLongTrend = request.security(syminfo.tickerid, hierBiasTfTrend, close > ta.ema(close, htfEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+hierBiasShortSetup = request.security(syminfo.tickerid, hierBiasTfSetup, close < ta.ema(close, htfEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+hierBiasShortTrend = request.security(syminfo.tickerid, hierBiasTfTrend, close < ta.ema(close, htfEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+hierBiasLongOK = hierBiasLongSetup and hierBiasLongTrend
+hierBiasShortOK = hierBiasShortSetup and hierBiasShortTrend
 effMinHTFAligned =
      (isMES and enableMesAntiChop) ? mesMinHTFAligned :
      ((isMNQ_3m or isMNQ_5m) ? math.max(minHTFAligned, 2) : minHTFAligned)
@@ -1912,6 +1922,10 @@ shouldEnterLong := shouldEnterLong and candleBullStrict
 shouldEnterShort := shouldEnterShort and candleBearStrict
 shouldEnterLong := shouldEnterLong and (not isMES or mesFixedConfigOK)
 shouldEnterShort := shouldEnterShort and (not isMES or mesFixedConfigOK)
+hierBiasApplies = enableHierarchicalBias and is10min
+if hierBiasApplies
+    shouldEnterLong := shouldEnterLong and hierBiasLongOK
+    shouldEnterShort := shouldEnterShort and hierBiasShortOK
 mtfStrictNeed =
      enableMTFStrictFilter and mtfStrictApplies and
      (shouldEnterLong or shouldEnterShort) and
