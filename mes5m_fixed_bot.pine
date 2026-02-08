@@ -2346,6 +2346,7 @@ if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit
     float currentTP4 = baseTP4 * tpMult
     v71_tp1Target := currentTP1
     currentProfitPts = close - localEntryPrice
+    if true
         if currentProfitPts > 0
             v71_profitBarsCount := v71_profitBarsCount + 1
         else
@@ -2480,6 +2481,7 @@ if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit
     float currentTP4 = baseTP4 * tpMult
     v71_tp1Target := currentTP1
     currentProfitPts = localEntryPrice - close
+    if true
         if currentProfitPts > 0
             v71_profitBarsCount := v71_profitBarsCount + 1
         else
