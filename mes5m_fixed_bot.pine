@@ -2958,6 +2958,7 @@ if enableMaxHoldExit and strategy.position_size != 0 and holdingPeriod >= maxHol
 f_traderspostAlerts(_tpTradeId, _tookTrade) =>
     tradeIdLocal = _tpTradeId
     tookLocal = _tookTrade
+    exitAlertSentLocal = false
     tpUseSim = false
     tpFlat = (strategy.position_size == 0)
     tpLong = (strategy.position_size > 0)
@@ -3002,7 +3003,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
                  '}'
             if exitQty > 0
                 alert(exitNowMessage, alert.freq_once_per_bar)
-                exitAlertSentThisBar := true
+                exitAlertSentLocal := true
                 tookLocal := true
     if entryOK and longCondition and tpFlat and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
         bool is3m_chart = timeframe.period == "3"
@@ -3089,12 +3090,13 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
              '"timestamp":"' + str.tostring(time) + '"' +
              '}'
         alert(eodExitMessage, alert.freq_once_per_bar)
-        exitAlertSentThisBar := true
+        exitAlertSentLocal := true
         tookLocal := true
-    [tradeIdLocal, tookLocal]
-[newTradeIdTmp, newTookTmp] = f_traderspostAlerts(tpTradeId, tookTradeThisBar)
+    [tradeIdLocal, tookLocal, exitAlertSentLocal]
+[newTradeIdTmp, newTookTmp, newExitAlertTmp] = f_traderspostAlerts(tpTradeId, tookTradeThisBar)
 tpTradeId := newTradeIdTmp
 tookTradeThisBar := newTookTmp
+exitAlertSentThisBar := exitAlertSentThisBar or newExitAlertTmp
 if enableTradersPostAlerts_eff and exitIssuedThisBar and not exitAlertSentThisBar and not tookTradeThisBar
     fallbackReason = lastExitReason != "NONE" ? lastExitReason : "exit"
     alert(tpExitWebhook(fallbackReason), alert.freq_once_per_bar)
