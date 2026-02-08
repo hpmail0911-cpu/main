@@ -1669,9 +1669,11 @@ var string entryPriority = "NONE"
 var string activeSignalType = "NONE"
 var bool exitIssuedThisBar = false
 var string lastExitReason = "NONE"
+var bool exitAlertSentThisBar = false
 if barstate.isnew
     tookTradeThisBar := false
     exitIssuedThisBar := false
+    exitAlertSentThisBar := false
 bool canEnterNewPosition = strategy.position_size == 0
 maxDailyTrades_eff = (isMNQ_3m or isMNQ_5m) ? mnqMaxDailyTrades : maxDailyTrades
 maxTradesReached = enableDailyTradeLimit and todayTradeCount >= maxDailyTrades_eff
@@ -2895,6 +2897,7 @@ if topstepExitNow and not exitIssuedThisBar
     lastExitReason := "TOPSTEP_RTH_EXIT"
     if enableTradersPostAlerts_eff and not tookTradeThisBar
         alert(tpExitWebhook("topstep_rth_exit"), alert.freq_once_per_bar)
+        exitAlertSentThisBar := true
         tookTradeThisBar := true
 mnqRiskGuardsActive = not (mjv6UltraActive and isMNQ)
 if isMNQ and (mnqIs3m or mnqIs5m) and strategy.position_size != 0 and not exitIssuedThisBar and not mesMJV6Active and mnqRiskGuardsActive
@@ -2904,6 +2907,7 @@ if isMNQ and (mnqIs3m or mnqIs5m) and strategy.position_size != 0 and not exitIs
         lastExitReason := "HARD_STOP"
         if enableTradersPostAlerts_eff and not tookTradeThisBar
             alert(tpExitWebhook("hard_stop"), alert.freq_once_per_bar)
+            exitAlertSentThisBar := true
             tookTradeThisBar := true
     if enableQuickExitRed and not exitIssuedThisBar and not na(mnqQuickBars) and holdingPeriod >= mnqQuickBars and not na(mnqQuickLossDol) and currentProfitDollars <= -(mnqQuickLossDol * qtyForGuards)
         strategy.close_all(comment="QUICK_EXIT_RED")
@@ -2911,6 +2915,7 @@ if isMNQ and (mnqIs3m or mnqIs5m) and strategy.position_size != 0 and not exitIs
         lastExitReason := "QUICK_EXIT_RED"
         if enableTradersPostAlerts_eff and not tookTradeThisBar
             alert(tpExitWebhook("quick_exit_red"), alert.freq_once_per_bar)
+            exitAlertSentThisBar := true
             tookTradeThisBar := true
     if enableRedTimeStop and not exitIssuedThisBar and not na(mnqRedStopBars) and holdingPeriod >= mnqRedStopBars and currentProfitDollars < 0
         strategy.close_all(comment="TIME_STOP_RED")
@@ -2918,6 +2923,7 @@ if isMNQ and (mnqIs3m or mnqIs5m) and strategy.position_size != 0 and not exitIs
         lastExitReason := "TIME_STOP_RED"
         if enableTradersPostAlerts_eff and not tookTradeThisBar
             alert(tpExitWebhook("time_stop_red"), alert.freq_once_per_bar)
+            exitAlertSentThisBar := true
             tookTradeThisBar := true
     if enableMAEProtection and not exitIssuedThisBar and not na(mnqMaeActivateDol) and peakProfit >= (mnqMaeActivateDol * qtyForGuards) and currentProfitDollars <= (peakProfit * maeDrawbackPercent)
         strategy.close_all(comment="MAE_PROTECT")
@@ -2925,6 +2931,7 @@ if isMNQ and (mnqIs3m or mnqIs5m) and strategy.position_size != 0 and not exitIs
         lastExitReason := "MAE_PROTECT"
         if enableTradersPostAlerts_eff and not tookTradeThisBar
             alert(tpExitWebhook("mae_protection"), alert.freq_once_per_bar)
+            exitAlertSentThisBar := true
             tookTradeThisBar := true
 mesIs3m = isMES and is3min
 mesIs5m = isMES and is5min
@@ -2936,6 +2943,7 @@ if isMES and (mesIs3m or mesIs5m) and strategy.position_size != 0 and not exitIs
         lastExitReason := "HARD_STOP"
         if enableTradersPostAlerts_eff and not tookTradeThisBar
             alert(tpExitWebhook("hard_stop"), alert.freq_once_per_bar)
+            exitAlertSentThisBar := true
             tookTradeThisBar := true
 if useLosingTradeAutoClose and strategy.position_size != 0 and not na(entryPrice) and not mesMJV6Active and not mjv6UltraActive
     lossThresholdDollars = (strategy.equity * losingTradeThreshold / 100)
@@ -2994,6 +3002,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
                  '}'
             if exitQty > 0
                 alert(exitNowMessage, alert.freq_once_per_bar)
+                exitAlertSentThisBar := true
                 tookLocal := true
     if entryOK and longCondition and tpFlat and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
         bool is3m_chart = timeframe.period == "3"
@@ -3080,8 +3089,14 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
              '"timestamp":"' + str.tostring(time) + '"' +
              '}'
         alert(eodExitMessage, alert.freq_once_per_bar)
+        exitAlertSentThisBar := true
         tookLocal := true
     [tradeIdLocal, tookLocal]
 [newTradeIdTmp, newTookTmp] = f_traderspostAlerts(tpTradeId, tookTradeThisBar)
 tpTradeId := newTradeIdTmp
 tookTradeThisBar := newTookTmp
+if enableTradersPostAlerts_eff and exitIssuedThisBar and not exitAlertSentThisBar and not tookTradeThisBar
+    fallbackReason = lastExitReason != "NONE" ? lastExitReason : "exit"
+    alert(tpExitWebhook(fallbackReason), alert.freq_once_per_bar)
+    exitAlertSentThisBar := true
+    tookTradeThisBar := true
