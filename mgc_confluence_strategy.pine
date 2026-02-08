@@ -312,6 +312,8 @@ shockCooldownBars = input.int(20, "Cooldown Bars After Shock", minval=0, maxval=
 flattenOnShock = input.bool(false, "Flatten On Shock (alert)", group=group_inst)
 enableMaeExit = input.bool(false, "MAE Emergency Exit (ATR)", group=group_inst)
 maeExitAtrMult = input.float(2.0, "MAE Exit Threshold (ATR)", minval=0.5, maxval=10.0, group=group_inst)
+enableMaePctExit = input.bool(false, "MAE % Drawdown From Peak", group=group_inst)
+maePctDrawdown = input.float(20.0, "MAE % Drawdown Threshold", minval=1.0, maxval=50.0, group=group_inst)
 // ==============================
 // 🏛️ INSTITUTIONAL TRAILING STOP
 // ==============================
@@ -406,6 +408,9 @@ var float instTrailStop = na
 var float lastInstTrailStop = na
 var int lastInstExitBar = na
 var bool instExitLatched = false
+var float peakPriceSinceEntry = na
+var float troughPriceSinceEntry = na
+var float maeDrawdownPct = na
 barsSinceLastTrade = bar_index - lastTradeBar
 cooldownOK = bar_index >= cooldownUntilBar
 lossStreakOK = consecutiveLosses < maxConsecutiveLosses
@@ -543,6 +548,8 @@ if posOpened
     instTrailStop := na
     lastInstTrailStop := na
     instExitLatched := false
+    peakPriceSinceEntry := high
+    troughPriceSinceEntry := low
     // Initial cooperative stop from entry price
     atrStop = (strategy.position_size > 0) ? (entryPrice - (atrAtEntry * initialStopATR)) : (entryPrice + (atrAtEntry * initialStopATR))
     structStop = (strategy.position_size > 0) ? (na(lastPivotLow) ? na : (lastPivotLow - (atrAtEntry * stopStructureBufferATR))) : (na(lastPivotHigh) ? na : (lastPivotHigh + (atrAtEntry * stopStructureBufferATR)))
@@ -564,6 +571,8 @@ if posClosed
     instTrailActive := false
     instTrailStop := na
     lastInstTrailStop := na
+    peakPriceSinceEntry := na
+    troughPriceSinceEntry := na
 // ==============================
 // 🫀 HEARTBEAT / SYNC (OPTIONAL)
 // ==============================
@@ -580,6 +589,14 @@ if inPos and not na(entryPrice)
     favorable = isLong ? (high - entryPrice) : (entryPrice - low)
     maePoints := math.min(maePoints, adverse)
     mfePoints := math.max(mfePoints, favorable)
+    if isLong
+        peakPriceSinceEntry := na(peakPriceSinceEntry) ? high : math.max(peakPriceSinceEntry, high)
+        maeDrawdownPct := peakPriceSinceEntry > 0 ? ((peakPriceSinceEntry - close) / peakPriceSinceEntry) * 100.0 : na
+    else
+        troughPriceSinceEntry := na(troughPriceSinceEntry) ? low : math.min(troughPriceSinceEntry, low)
+        maeDrawdownPct := troughPriceSinceEntry > 0 ? ((close - troughPriceSinceEntry) / troughPriceSinceEntry) * 100.0 : na
+else
+    maeDrawdownPct := na
 // ==============================
 // 🏛️ INSTITUTIONAL EMERGENCY EXITS (ALERT + OPTIONAL CLOSE)
 // ==============================
@@ -596,6 +613,9 @@ if canInstExit
         instExitTriggered := true
     else if enableMaeExit and not na(maeAtr) and maeAtr >= maeExitAtrMult
         instExitReason := "MAE"
+        instExitTriggered := true
+    else if enableMaePctExit and not na(maeDrawdownPct) and maeDrawdownPct >= maePctDrawdown
+        instExitReason := "MAE_PCT"
         instExitTriggered := true
 if instExitTriggered
     if enableAlerts
@@ -625,6 +645,8 @@ if instExitTriggered
     instTrailActive := false
     instTrailStop := na
     lastInstTrailStop := na
+    peakPriceSinceEntry := na
+    troughPriceSinceEntry := na
     qtyRemaining := 0.0
     qtyOriginal := 0.0
     entryBar := na
@@ -731,6 +753,8 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
         instTrailActive := false
         instTrailStop := na
         lastInstTrailStop := na
+        peakPriceSinceEntry := na
+        troughPriceSinceEntry := na
         qtyRemaining := 0.0
         qtyOriginal := 0.0
         entryBar := na
@@ -763,6 +787,8 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
             instTrailActive := false
             instTrailStop := na
             lastInstTrailStop := na
+            peakPriceSinceEntry := na
+            troughPriceSinceEntry := na
             qtyRemaining := 0.0
             qtyOriginal := 0.0
             entryBar := na
@@ -824,6 +850,8 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
                 instTrailActive := false
                 instTrailStop := na
                 lastInstTrailStop := na
+                peakPriceSinceEntry := na
+                troughPriceSinceEntry := na
                 qtyRemaining := 0.0
                 qtyOriginal := 0.0
                 entryBar := na
@@ -849,6 +877,8 @@ if enableAlerts and emitExitAlerts and inPos and not na(entryPrice) and qtyRemai
                 instTrailActive := false
                 instTrailStop := na
                 lastInstTrailStop := na
+                peakPriceSinceEntry := na
+                troughPriceSinceEntry := na
                 qtyRemaining := 0.0
                 qtyOriginal := 0.0
                 entryBar := na
