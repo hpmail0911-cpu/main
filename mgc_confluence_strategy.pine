@@ -70,6 +70,15 @@ enableHighWinRateMode = input.bool(false, "Enable High Win Rate Mode", group=gro
 quickTpMultiplier = input.float(0.6, "Quick TP Multiplier", minval=0.3, maxval=1.0, group=group_hw)
 widerSlMultiplier = input.float(1.5, "Wider SL Multiplier", minval=1.0, maxval=2.5, group=group_hw)
 // ==============================
+// 📈 INDICATOR SUITE (OPTIONAL)
+// ==============================
+group_ind = "📈 Indicator Suite"
+envelopeLen = input.int(12, "Envelope Length", minval=5, maxval=50, group=group_ind)
+envelopeDev = input.float(0.8, "Envelope Deviation %", minval=0.2, maxval=2.0, group=group_ind)
+supertrendAtrPeriod = input.int(8, "SuperTrend ATR Period", minval=5, maxval=20, group=group_ind)
+supertrendFactor = input.float(2.2, "SuperTrend ATR Factor", minval=1.0, maxval=5.0, group=group_ind)
+showExtraIndicators = input.bool(false, "Show Envelope/SuperTrend", group=group_ind)
+// ==============================
 // 🕒 SESSION FILTERS
 // ==============================
 tradingHoursOnly = input.bool(true, "US Trading Hours Only")
@@ -231,6 +240,10 @@ stochD = ta.sma(stochK, stochSmoothD)
 volumeMA = ta.sma(volume, 20)
 volumeSpike = volume > volumeMA * volumeRatioMin
 atr = ta.atr(14)
+envBasis = ta.sma(close, envelopeLen)
+upperEnv = envBasis * (1 + envelopeDev / 100.0)
+lowerEnv = envBasis * (1 - envelopeDev / 100.0)
+[superTrendLine, superTrendDir] = ta.supertrend(supertrendFactor, supertrendAtrPeriod)
 // Institutional volatility/spike filters (avoid news/whipsaw candles)
 useVolatilityGuard = input.bool(true, "Volatility/Spike Guard (institutional)")
 maxAtrPct = input.float(0.60, "Max ATR% of Price", minval=0.10, maxval=3.0,
@@ -1265,6 +1278,9 @@ plot(ema50, "EMA 50", color=color.new(color.blue, 50), linewidth=2)
 plot(ema200, "EMA 200", color=color.new(color.purple, 50), linewidth=2)
 plot(hull, "Hull MA", color=hull_bullish ? color.green : hull_bearish ? color.red : color.gray, linewidth=3)
 plot(inPos ? currentStop : na, "Stop (model)", color=breakeven_active ? color.yellow : trailing_active ? color.aqua : color.red, linewidth=2, style=plot.style_cross)
+plot(showExtraIndicators ? upperEnv : na, "Envelope Upper", color=color.new(color.orange, 30), linewidth=1)
+plot(showExtraIndicators ? lowerEnv : na, "Envelope Lower", color=color.new(color.orange, 30), linewidth=1)
+plot(showExtraIndicators ? superTrendLine : na, "SuperTrend", color=superTrendDir == 1 ? color.lime : color.red, linewidth=2)
 plotshape(longSignal, "Long Signal", shape.triangleup, location.belowbar, color=color.green, size=size.tiny, text="L " + str.tostring(confluenceLong))
 plotshape(shortSignal, "Short Signal", shape.triangledown, location.abovebar, color=color.red, size=size.tiny, text="S " + str.tostring(confluenceShort))
 bgcolor(not sessionFilterOK ? color.new(color.red, 92) : na)
