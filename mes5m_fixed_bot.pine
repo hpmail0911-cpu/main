@@ -93,18 +93,6 @@ fhGrayZonePenalty = input.float(10.0, "Gray-zone penalty (points)", minval=0.0, 
 fhAllowSwingInGrayZone = input.bool(false, "Allow swing signals in gray zone if quality high", group=filterHarmonyGroup)
 fhAvoidSidewaysEntries = input.bool(false, "✅ Avoid sideways/chop/gray-zone entries", group=filterHarmonyGroup)
 fhSidewaysBypassOnlyIfVeryStrong = input.bool(true, "Bypass sideways block only if VERY strong", group=filterHarmonyGroup)
-kenyaGroup = "🔥 MNQ 3m/5m Profit Logic (Kenya)"
-mnqProfitMode = input.string("MJV6 Ultra", "MNQ Profit Mode", options=["MJV6 Ultra","Kenya"], group=kenyaGroup)
-useKenyaMnq3mProfitLogic = input.bool(true, "Use Kenya 60/25/10/5 ladder on MNQ 3m", group=kenyaGroup)
-useKenyaMnq5mProfitLogic = input.bool(true, "Use Kenya 60/25/10/5 ladder on MNQ 5m", group=kenyaGroup)
-kenyaAllowIntrabarEntries = input.bool(true, "Kenya MNQ 3m: allow intrabar entries (restore original behavior)", group=kenyaGroup)
-kenyaEnableSignalReversal = input.bool(true, "Kenya MNQ 3m: enable signal-reversal exits", group=kenyaGroup)
-useV20KenyaPerfectProfit = input.bool(false, "Use V20 Kenya PERFECT PROFIT module (overrides other exits)", group=kenyaGroup)
-v20AllowOn3m = input.bool(false, "V20: allow on 3m charts (default OFF to protect 3m expectancy)", group=kenyaGroup)
-kenyaMnq3mUseSingleBooster = input.bool(false, "MNQ 3m: Kenya SINGLE booster (1 contract)", group=kenyaGroup)
-kenyaMnq3mTargetPctOfTP1 = input.float(0.75, "MNQ 3m booster: target = TP1 × pct", minval=0.40, maxval=1.00, step=0.05, group=kenyaGroup)
-kenyaMnq3mBETriggerPctOfTarget = input.float(0.55, "MNQ 3m booster: move stop to BE after target × pct", minval=0.20, maxval=1.00, step=0.05, group=kenyaGroup)
-kenyaMnq3mUseFeesForBE = input.bool(true, "MNQ 3m booster: BE includes fees/slippage", group=kenyaGroup)
 profitLogicModeGroup = "📈 Profit Logic Mode"
 useOriginalProfitLogic = input.bool(false, "Use ORIGINAL profit logic (legacy V71/Kenya exits)", group=profitLogicModeGroup)
 forceOriginalMJV6 = input.bool(true, "Force ORIGINAL MJV6 profit logic (locks MJV6, disables V20/Kenya/V71 overrides)", group=profitLogicModeGroup)
@@ -112,7 +100,6 @@ useMJV6UltraProfitLogic = input.bool(false, "Use MJV6 ULTRA profit logic (overri
 allowMultiProfitModules = input.bool(false, "Run Kenya/V71/V20/MJV6 together", group=profitLogicModeGroup)
 useMJV6UltraProfitLogic_eff = forceOriginalMJV6 ? true : useMJV6UltraProfitLogic
 allowMultiProfitModules_eff = forceOriginalMJV6 ? false : allowMultiProfitModules
-mnqProfitMode_eff = forceOriginalMJV6 ? "MJV6 Ultra" : mnqProfitMode
 mjv6UltraActive = useMJV6UltraProfitLogic_eff
 mnqMJV6Group = "📈 MNQ MJV6 Ultra Tuning"
 mnqMJV6TPMult_3m = input.float(1.60, "MNQ 3m: TP multiplier (MJV6 Ultra)", minval=0.8, maxval=2.5, step=0.05, group=mnqMJV6Group)
@@ -123,7 +110,6 @@ mnqMJV6TPMult_3m_eff = forceOriginalMJV6 ? 1.60 : mnqMJV6TPMult_3m
 mnqMJV6TPMult_5m_eff = forceOriginalMJV6 ? 1.80 : mnqMJV6TPMult_5m
 mnqMJV6StopMult_3m_eff = forceOriginalMJV6 ? 0.80 : mnqMJV6StopMult_3m
 mnqMJV6StopMult_5m_eff = forceOriginalMJV6 ? 0.90 : mnqMJV6StopMult_5m
-useV20KenyaPerfectProfit_eff = (forceOriginalMJV6 ? false : useV20KenyaPerfectProfit) and not useOriginalProfitLogic
 useMJV6MesProfitLogic_eff = (forceOriginalMJV6 ? true : useMJV6MesProfitLogic) and not useOriginalProfitLogic
 mesMJV6HighWinProtect_eff = forceOriginalMJV6 ? true : mesMJV6HighWinProtect
 mesMJV6TPScale_eff = forceOriginalMJV6 ? 0.75 : mesMJV6TPScale
@@ -133,7 +119,6 @@ mesMJV6TrailActivationRatio_eff = forceOriginalMJV6 ? 0.50 : mesMJV6TrailActivat
 enableMnq3mWinRateBooster_eff = enableMnq3mWinRateBooster and not useOriginalProfitLogic
 enableMes3mWinRateBooster_eff = enableMes3mWinRateBooster and not useOriginalProfitLogic
 enableMes5mWinRateBooster_eff = enableMes5mWinRateBooster and not useOriginalProfitLogic
-kenyaMnq3mUseSingleBooster_eff = kenyaMnq3mUseSingleBooster and not useOriginalProfitLogic
 winOptGroup = "🏆 WIN RATE OPTIMIZATION V71"
 enableAdaptiveTrailing = input.bool(true, "✅ Enable Adaptive Trailing Stop", group=winOptGroup)
 trailingActivationPct = input.float(50.0, "Trailing Activation (% of TP1)", minval=20, maxval=100, group=winOptGroup)
@@ -626,9 +611,7 @@ isMNQ_3m = isMNQ and is3min
 isMNQ_5m = isMNQ and is5min
 isMES_3m = isMES and is3min
 isMES_5m = isMES and is5min
-mnqKenyaActive =
-     (allowMultiProfitModules_eff or (mnqProfitMode_eff == "Kenya")) and
-     ((isMNQ_3m and useKenyaMnq3mProfitLogic) or (isMNQ_5m and useKenyaMnq5mProfitLogic))
+mnqKenyaActive = false
 htf5mBull = request.security(syminfo.tickerid, "5", (close > open) and (math.abs(close - open) > (high - low) * 0.05), barmerge.gaps_off, barmerge.lookahead_off)
 htf5mBear = request.security(syminfo.tickerid, "5", (close < open) and (math.abs(close - open) > (high - low) * 0.05), barmerge.gaps_off, barmerge.lookahead_off)
 permGroup = "🧭 Higher-TF Permission Chain"
@@ -2074,7 +2057,6 @@ isPriorityIntrabar =
 curCandleOK = candleQualityOK and (not isDojiBar)
 prevCandleOK = candleQualityOK[1] and (not isDojiBar[1])
 entryOK_intrabar =
-     (kenyaAllowIntrabarEntries and useKenyaMnq3mProfitLogic and isMNQ and timeframe.period == "3") or
      ((not enterOnBarClose) and (allowIntrabarForP1P2 and isPriorityIntrabar))
 entryOK_barclose = barstate.isconfirmed
 entryOK_nextopen = barstate.isnew
@@ -2244,96 +2226,7 @@ exitSL = slExecutionMode == "ATR" ? futuresStopDistance : slExecutionMode == "In
 futuresTPDistance = atrMain * tpMultiplier
 ultraQuickTP = atrMain * (tpMultiplier * 0.5)
 is3m_chart_profit = timeframe.period == "3"
-kenyaActive_profit = mnqKenyaActive
-v20Active_profit =
-     useV20KenyaPerfectProfit_eff and
-     (not is3m_chart_profit or v20AllowOn3m) and
-     not kenyaActive_profit and
-     (allowMultiProfitModules_eff or not (isMES and useMJV6MesProfitLogic_eff))
-if (allowMultiProfitModules_eff or not mjv6UltraActive) and v20Active_profit and strategy.position_size > 0
-    float avgPrice = strategy.position_avg_price
-    float localStopLoss = avgPrice - exitSL
-    float trueBE = avgPrice + feesPoints
-    float lockStop = avgPrice + lockKeepPoints
-    if useSL and enableGapStopProtection and profitTriggerHit and canExitNow
-        float protectStopGap = enableFeeModel ? math.max(lockStop, trueBE) : lockStop
-        if open <= protectStopGap and not exitIssuedThisBar
-            strategy.close_all(comment="GAP_STOP_LONG")
-            exitIssuedThisBar := true
-            lastExitReason := "GAP_STOP"
-    if useTP and useEnhancedTP
-        tp1Points = math.round((ultraQuickTP * 0.4) / syminfo.mintick)
-        tp2Points = math.round((futuresTPDistance * 0.3) / syminfo.mintick)
-        tp3Points = math.round((futuresTPDistance * 0.6) / syminfo.mintick)
-        tp4Points = math.round((futuresTPDistance * 1.0) / syminfo.mintick)
-        strategy.exit("V20_TP1_L", from_entry="LONG", qty_percent=60, profit=tp1Points)
-        strategy.exit("V20_TP2_L", from_entry="LONG", qty_percent=25, profit=tp2Points)
-        strategy.exit("V20_TP3_L", from_entry="LONG", qty_percent=10, profit=tp3Points)
-        strategy.exit("V20_TP4_L", from_entry="LONG", qty_percent=5, profit=tp4Points)
-    if quickExitMode and holdingPeriod >= maxHoldingBars and canExitNow and not runnerActive
-        if not exitIssuedThisBar
-            strategy.close("LONG", comment="V20_TIME_EXIT_LONG")
-            exitIssuedThisBar := true
-            lastExitReason := "V20_TIME_EXIT"
-    if useSL and not exitIssuedThisBar
-        float v20ProtectStop = localStopLoss
-        if enableFeeModel and beTriggerHit and canExitNow
-            v20ProtectStop := math.max(v20ProtectStop, trueBE)
-        if profitTriggerHit and canExitNow
-            float protectStop = enableFeeModel ? math.max(lockStop, trueBE) : lockStop
-            v20ProtectStop := math.max(v20ProtectStop, protectStop)
-        if useSmartTrailing and close > avgPrice + (futuresTPDistance * trailActivationRatio) and canExitNow
-            trailDistance = atrMain * 0.6
-            v20ProtectStop := math.max(v20ProtectStop, close - trailDistance)
-        [stopOkL_v20, stopValL_v20, stopCrossedL_v20] = stopCheckLong(v20ProtectStop)
-        if stopOkL_v20
-            strategy.exit("V20_PROTECT_L", from_entry="LONG", stop=stopValL_v20)
-        else if stopCrossedL_v20 and not exitIssuedThisBar
-            strategy.close("LONG", comment="V20_STOP_CROSSED")
-            exitIssuedThisBar := true
-            lastExitReason := "V20_STOP_CROSSED"
-if (allowMultiProfitModules_eff or not mjv6UltraActive) and v20Active_profit and strategy.position_size < 0
-    float avgPrice = strategy.position_avg_price
-    float localStopLoss = avgPrice + exitSL
-    float trueBE_S = avgPrice - feesPoints
-    float lockStopS = avgPrice - lockKeepPoints
-    if useSL and enableGapStopProtection and profitTriggerHit and canExitNow
-        float protectStopGapS = enableFeeModel ? math.min(lockStopS, trueBE_S) : lockStopS
-        if open >= protectStopGapS and not exitIssuedThisBar
-            strategy.close_all(comment="GAP_STOP_SHORT")
-            exitIssuedThisBar := true
-            lastExitReason := "GAP_STOP"
-    if useTP and useEnhancedTP
-        tp1Points = math.round((ultraQuickTP * 0.5) / syminfo.mintick)
-        tp2Points = math.round((futuresTPDistance * 0.4) / syminfo.mintick)
-        tp3Points = math.round((futuresTPDistance * 0.7) / syminfo.mintick)
-        tp4Points = math.round((futuresTPDistance * 1.1) / syminfo.mintick)
-        strategy.exit("V20_TP1_S", from_entry="SHORT", qty_percent=60, profit=tp1Points)
-        strategy.exit("V20_TP2_S", from_entry="SHORT", qty_percent=25, profit=tp2Points)
-        strategy.exit("V20_TP3_S", from_entry="SHORT", qty_percent=10, profit=tp3Points)
-        strategy.exit("V20_TP4_S", from_entry="SHORT", qty_percent=5, profit=tp4Points)
-    if quickExitMode and holdingPeriod >= maxHoldingBars and canExitNow and not runnerActive
-        if not exitIssuedThisBar
-            strategy.close("SHORT", comment="V20_TIME_EXIT_SHORT")
-            exitIssuedThisBar := true
-            lastExitReason := "V20_TIME_EXIT"
-    if useSL and not exitIssuedThisBar
-        float v20ProtectStopS = localStopLoss
-        if enableFeeModel and beTriggerHit and canExitNow
-            v20ProtectStopS := math.min(v20ProtectStopS, trueBE_S)
-        if profitTriggerHit and canExitNow
-            float protectStopS = enableFeeModel ? math.min(lockStopS, trueBE_S) : lockStopS
-            v20ProtectStopS := math.min(v20ProtectStopS, protectStopS)
-        if useSmartTrailing and close < avgPrice - (futuresTPDistance * trailActivationRatio) and canExitNow
-            trailDistance = atrMain * 0.6
-            v20ProtectStopS := math.min(v20ProtectStopS, close + trailDistance)
-        [stopOkS_v20, stopValS_v20, stopCrossedS_v20] = stopCheckShort(v20ProtectStopS)
-        if stopOkS_v20
-            strategy.exit("V20_PROTECT_S", from_entry="SHORT", stop=stopValS_v20)
-        else if stopCrossedS_v20 and not exitIssuedThisBar
-            strategy.close("SHORT", comment="V20_STOP_CROSSED")
-            exitIssuedThisBar := true
-            lastExitReason := "V20_STOP_CROSSED"
+v20Active_profit = false
 if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit)) and isMES and useMJV6MesProfitLogic_eff and strategy.position_size != 0
     float mjvAtr = atr10
     float effectiveTPMult = tpMultiplier * (mesMJV6HighWinProtect_eff ? mesMJV6TPScale_eff : 1.0)
@@ -2435,7 +2328,6 @@ if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit
     localEntryPrice = strategy.position_avg_price
     bool is3m_chart = timeframe.period == "3"
     bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
-    bool kenyaActive = mnqKenyaActive
     bool isMnqWinTF = isMNQ and (is3min or is5min)
     bool isMnq5m = isMNQ and is5min
     bool isMes3m = isMES and is3m_chart
@@ -2445,69 +2337,15 @@ if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit
     float baseTP2 = isMES ? mesTP_pts * 1.5 : (useMnq3m ? mnq_customTP2_3m : mnq_customTP2)
     float baseTP3 = isMES ? mesTP_pts * 2.5 : (useMnq3m ? mnq_customTP3_3m : mnq_customTP3)
     float baseTP4 = isMES ? mesTP_pts * 4.0 : (useMnq3m ? mnq_customTP4_3m : mnq_customTP4)
-    float tpMult = (highWinRateMode and isMnq5m and not kenyaActive) ? quickTPMultiplier * v71_volAdjust : v71_volAdjust
-    float slMult = (highWinRateMode and isMnq5m and not kenyaActive) ? widerSLMultiplier : 1.0
-    float currentSL = kenyaActive ? baseSL : (baseSL * slMult)
-    float currentTP1 = kenyaActive ? baseTP1 : (baseTP1 * tpMult)
-    float currentTP2 = kenyaActive ? baseTP2 : (baseTP2 * tpMult)
-    float currentTP3 = kenyaActive ? baseTP3 : (baseTP3 * tpMult)
-    float currentTP4 = kenyaActive ? baseTP4 : (baseTP4 * tpMult)
+    float tpMult = (highWinRateMode and isMnq5m) ? quickTPMultiplier * v71_volAdjust : v71_volAdjust
+    float slMult = (highWinRateMode and isMnq5m) ? widerSLMultiplier : 1.0
+    float currentSL = baseSL * slMult
+    float currentTP1 = baseTP1 * tpMult
+    float currentTP2 = baseTP2 * tpMult
+    float currentTP3 = baseTP3 * tpMult
+    float currentTP4 = baseTP4 * tpMult
     v71_tp1Target := currentTP1
-    if kenyaActive
-        localStopLoss = localEntryPrice - currentSL
-        bool kenyaSingle = math.abs(strategy.position_size) == 1
-        bool kenyaSingleBooster = kenyaMnq3mUseSingleBooster_eff and kenyaSingle and isMNQ and is3m_chart and highWinRateMode
-        float kenyaBEOffsetPts = 0.0
-        if kenyaSingleBooster and kenyaMnq3mUseFeesForBE and enableFeeModel
-            oneWayFeesK = commissionPerContract + extraFeesPerContract
-            roundTripFeesK = oneWayFeesK * 2
-            slipPtsK = slippageTicksOneWay * syminfo.mintick
-            kenyaBEOffsetPts := (roundTripFeesK / safePointValue) + slipPtsK
-        if kenyaSingleBooster
-            float targetPts = currentTP1 * kenyaMnq3mTargetPctOfTP1
-            int targetTicks = math.round(targetPts / syminfo.mintick)
-            float curProfitPts = close - localEntryPrice
-            float beTriggerPts = targetPts * kenyaMnq3mBETriggerPctOfTarget
-            float stopNow = localStopLoss
-            if curProfitPts >= beTriggerPts
-                stopNow := math.max(stopNow, localEntryPrice + kenyaBEOffsetPts)
-            [stopOkL_kenyaSingle, stopValL_kenyaSingle, stopCrossedL_kenyaSingle] = stopCheckLong(stopNow)
-            if useTP and useSL
-                if stopOkL_kenyaSingle
-                    strategy.exit("KENYA_SINGLE_L", from_entry="LONG", qty_percent=100, profit=targetTicks, stop=stopValL_kenyaSingle)
-                else if stopCrossedL_kenyaSingle and not exitIssuedThisBar
-                    strategy.close("LONG", comment="KENYA_STOP_CROSSED")
-                    exitIssuedThisBar := true
-                    lastExitReason := "KENYA_STOP_CROSSED"
-            else if useTP
-                strategy.exit("KENYA_SINGLE_L", from_entry="LONG", qty_percent=100, profit=targetTicks)
-            else if useSL
-                if stopOkL_kenyaSingle
-                    strategy.exit("KENYA_SINGLE_L", from_entry="LONG", qty_percent=100, stop=stopValL_kenyaSingle)
-                else if stopCrossedL_kenyaSingle and not exitIssuedThisBar
-                    strategy.close("LONG", comment="KENYA_STOP_CROSSED")
-                    exitIssuedThisBar := true
-                    lastExitReason := "KENYA_STOP_CROSSED"
-        else
-            tp1Ticks = math.round(currentTP1 / syminfo.mintick)
-            tp2Ticks = math.round(currentTP2 / syminfo.mintick)
-            tp3Ticks = math.round(currentTP3 / syminfo.mintick)
-            tp4Ticks = math.round(currentTP4 / syminfo.mintick)
-            if useTP
-                strategy.exit("KENYA_TP1_L", from_entry="LONG", qty_percent=60, profit=tp1Ticks)
-                strategy.exit("KENYA_TP2_L", from_entry="LONG", qty_percent=25, profit=tp2Ticks)
-                strategy.exit("KENYA_TP3_L", from_entry="LONG", qty_percent=10, profit=tp3Ticks)
-                strategy.exit("KENYA_TP4_L", from_entry="LONG", qty_percent=5, profit=tp4Ticks)
-            if useSL
-                [stopOkL_kenyaLadder, stopValL_kenyaLadder, stopCrossedL_kenyaLadder] = stopCheckLong(localStopLoss)
-                if stopOkL_kenyaLadder
-                    strategy.exit("KENYA_SL_L", from_entry="LONG", stop=stopValL_kenyaLadder)
-                else if stopCrossedL_kenyaLadder and not exitIssuedThisBar
-                    strategy.close("LONG", comment="KENYA_STOP_CROSSED")
-                    exitIssuedThisBar := true
-                    lastExitReason := "KENYA_STOP_CROSSED"
-    else
-        currentProfitPts = close - localEntryPrice
+    currentProfitPts = close - localEntryPrice
         if currentProfitPts > 0
             v71_profitBarsCount := v71_profitBarsCount + 1
         else
@@ -2624,7 +2462,6 @@ if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit
     localEntryPrice = strategy.position_avg_price
     bool is3m_chart = timeframe.period == "3"
     bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
-    bool kenyaActive = mnqKenyaActive
     bool isMnqWinTF = isMNQ and (is3min or is5min)
     bool isMnq5m = isMNQ and is5min
     bool isMes3m = isMES and is3m_chart
@@ -2634,69 +2471,15 @@ if (allowMultiProfitModules_eff or (not mjv6UltraActive and not v20Active_profit
     float baseTP2 = isMES ? mesTP_pts * 1.5 : (useMnq3m ? mnq_customTP2_3m : mnq_customTP2)
     float baseTP3 = isMES ? mesTP_pts * 2.5 : (useMnq3m ? mnq_customTP3_3m : mnq_customTP3)
     float baseTP4 = isMES ? mesTP_pts * 4.0 : (useMnq3m ? mnq_customTP4_3m : mnq_customTP4)
-    float tpMult = (highWinRateMode and isMnq5m and not kenyaActive) ? quickTPMultiplier * v71_volAdjust : v71_volAdjust
-    float slMult = (highWinRateMode and isMnq5m and not kenyaActive) ? widerSLMultiplier : 1.0
-    float currentSL = kenyaActive ? baseSL : (baseSL * slMult)
-    float currentTP1 = kenyaActive ? baseTP1 : (baseTP1 * tpMult)
-    float currentTP2 = kenyaActive ? baseTP2 : (baseTP2 * tpMult)
-    float currentTP3 = kenyaActive ? baseTP3 : (baseTP3 * tpMult)
-    float currentTP4 = kenyaActive ? baseTP4 : (baseTP4 * tpMult)
+    float tpMult = (highWinRateMode and isMnq5m) ? quickTPMultiplier * v71_volAdjust : v71_volAdjust
+    float slMult = (highWinRateMode and isMnq5m) ? widerSLMultiplier : 1.0
+    float currentSL = baseSL * slMult
+    float currentTP1 = baseTP1 * tpMult
+    float currentTP2 = baseTP2 * tpMult
+    float currentTP3 = baseTP3 * tpMult
+    float currentTP4 = baseTP4 * tpMult
     v71_tp1Target := currentTP1
-    if kenyaActive
-        localStopLoss = localEntryPrice + currentSL
-        bool kenyaSingle = math.abs(strategy.position_size) == 1
-        bool kenyaSingleBooster = kenyaMnq3mUseSingleBooster_eff and kenyaSingle and isMNQ and is3m_chart and highWinRateMode
-        float kenyaBEOffsetPts = 0.0
-        if kenyaSingleBooster and kenyaMnq3mUseFeesForBE and enableFeeModel
-            oneWayFeesK = commissionPerContract + extraFeesPerContract
-            roundTripFeesK = oneWayFeesK * 2
-            slipPtsK = slippageTicksOneWay * syminfo.mintick
-            kenyaBEOffsetPts := (roundTripFeesK / safePointValue) + slipPtsK
-        if kenyaSingleBooster
-            float targetPts = currentTP1 * kenyaMnq3mTargetPctOfTP1
-            int targetTicks = math.round(targetPts / syminfo.mintick)
-            float curProfitPts = localEntryPrice - close
-            float beTriggerPts = targetPts * kenyaMnq3mBETriggerPctOfTarget
-            float stopNow = localStopLoss
-            if curProfitPts >= beTriggerPts
-                stopNow := math.min(stopNow, localEntryPrice - kenyaBEOffsetPts)
-            [stopOkS_kenyaSingle, stopValS_kenyaSingle, stopCrossedS_kenyaSingle] = stopCheckShort(stopNow)
-            if useTP and useSL
-                if stopOkS_kenyaSingle
-                    strategy.exit("KENYA_SINGLE_S", from_entry="SHORT", qty_percent=100, profit=targetTicks, stop=stopValS_kenyaSingle)
-                else if stopCrossedS_kenyaSingle and not exitIssuedThisBar
-                    strategy.close("SHORT", comment="KENYA_STOP_CROSSED")
-                    exitIssuedThisBar := true
-                    lastExitReason := "KENYA_STOP_CROSSED"
-            else if useTP
-                strategy.exit("KENYA_SINGLE_S", from_entry="SHORT", qty_percent=100, profit=targetTicks)
-            else if useSL
-                if stopOkS_kenyaSingle
-                    strategy.exit("KENYA_SINGLE_S", from_entry="SHORT", qty_percent=100, stop=stopValS_kenyaSingle)
-                else if stopCrossedS_kenyaSingle and not exitIssuedThisBar
-                    strategy.close("SHORT", comment="KENYA_STOP_CROSSED")
-                    exitIssuedThisBar := true
-                    lastExitReason := "KENYA_STOP_CROSSED"
-        else
-            tp1Ticks = math.round(currentTP1 / syminfo.mintick)
-            tp2Ticks = math.round(currentTP2 / syminfo.mintick)
-            tp3Ticks = math.round(currentTP3 / syminfo.mintick)
-            tp4Ticks = math.round(currentTP4 / syminfo.mintick)
-            if useTP
-                strategy.exit("KENYA_TP1_S", from_entry="SHORT", qty_percent=60, profit=tp1Ticks)
-                strategy.exit("KENYA_TP2_S", from_entry="SHORT", qty_percent=25, profit=tp2Ticks)
-                strategy.exit("KENYA_TP3_S", from_entry="SHORT", qty_percent=10, profit=tp3Ticks)
-                strategy.exit("KENYA_TP4_S", from_entry="SHORT", qty_percent=5, profit=tp4Ticks)
-            if useSL
-                [stopOkS_kenyaLadder, stopValS_kenyaLadder, stopCrossedS_kenyaLadder] = stopCheckShort(localStopLoss)
-                if stopOkS_kenyaLadder
-                    strategy.exit("KENYA_SL_S", from_entry="SHORT", stop=stopValS_kenyaLadder)
-                else if stopCrossedS_kenyaLadder and not exitIssuedThisBar
-                    strategy.close("SHORT", comment="KENYA_STOP_CROSSED")
-                    exitIssuedThisBar := true
-                    lastExitReason := "KENYA_STOP_CROSSED"
-    else
-        currentProfitPts = localEntryPrice - close
+    currentProfitPts = localEntryPrice - close
         if currentProfitPts > 0
             v71_profitBarsCount := v71_profitBarsCount + 1
         else
@@ -2847,8 +2630,7 @@ if enableMomentumFadeExit and strategy.position_size != 0 and v71_inProfit and h
                 lastExitReason := "V71_MOM_FADE"
 strongOpposingBuy = (impulseLong or hasMomentumOverrideLong) and candleBull and not isDojiBar
 strongOpposingSell = (impulseShort or hasMomentumOverrideShort) and candleBear and not isDojiBar
-kenyaActiveNow = kenyaEnableSignalReversal and isMNQ and ((timeframe.period == "3" and useKenyaMnq3mProfitLogic) or (timeframe.period == "5" and useKenyaMnq5mProfitLogic))
-if (useSignalReversalExits or kenyaActiveNow) and strategy.position_size != 0 and holdingPeriod >= minBarsBeforeSignalReversal and not mesMJV6Active and not mjv6UltraActive
+if useSignalReversalExits and strategy.position_size != 0 and holdingPeriod >= minBarsBeforeSignalReversal and not mesMJV6Active and not mjv6UltraActive
     if strategy.position_size > 0 and strongOpposingSell
         if not exitIssuedThisBar
             strategy.close("LONG", comment="SIGNAL_REVERSAL_STRONG")
