@@ -1977,6 +1977,8 @@ bool shortCondition =
       (entryOK_nextopen and prevCandleOK and shouldEnterShort[1])) and
      not tookTradeThisBar
 entryOK = (entryTimingMode_eff == "Intrabar" ? entryOK_intrabar : entryTimingMode_eff == "Bar Close" ? entryOK_barclose : entryOK_nextopen)
+entrySignalLongForAlert = longCondition
+entrySignalShortForAlert = shortCondition
 selectedPriorityForLog = selectedPriority
 if longCondition and strategy.position_size == 0
     sigOff2 = 0
@@ -2873,7 +2875,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
          isAsianSession ? "ASIAN" :
          isUAESession ? "UAE" : "OTHER"
     if tpExitOnReverseSignal and enableTradersPostAlerts_eff and entryOK and not tpFlat and not tookLocal
-        if (longCondition and tpShort) or (shortCondition and tpLong)
+        if (entrySignalLongForAlert and tpShort) or (entrySignalShortForAlert and tpLong)
             exitDir = tpShort ? "SHORT" : tpLong ? "LONG" : "FLAT"
             exitQty = tpQty
             exitSigId = tpSignalId("exit", exitDir)
@@ -2897,7 +2899,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
                 alert(exitNowMessage, alert.freq_once_per_bar)
                 exitAlertSentLocal := true
                 tookLocal := true
-    if entryOK and longCondition and tpCanEnterLong and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
+    if entryOK and entrySignalLongForAlert and tpCanEnterLong and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
         bool is3m_chart = timeframe.period == "3"
         bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
         float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
@@ -2930,7 +2932,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
              '"timestamp":"' + str.tostring(time) + '"' +
              '}'
         alert(longEntryMessage, tpAlertFreq)
-    if entryOK and shortCondition and tpCanEnterShort and allowEntryShort and tpEntryQty > 0 and enableTradersPostAlerts_eff
+    if entryOK and entrySignalShortForAlert and tpCanEnterShort and allowEntryShort and tpEntryQty > 0 and enableTradersPostAlerts_eff
         bool is3m_chart = timeframe.period == "3"
         bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
         float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
