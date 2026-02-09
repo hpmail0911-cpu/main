@@ -2849,6 +2849,10 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
     exitAlertSentLocal = false
     tpUseSim = false
     tpFlat = (strategy.position_size == 0)
+    tpJustEnteredLong = (strategy.position_size > 0 and strategy.position_size[1] == 0)
+    tpJustEnteredShort = (strategy.position_size < 0 and strategy.position_size[1] == 0)
+    tpCanEnterLong = tpFlat or tpJustEnteredLong
+    tpCanEnterShort = tpFlat or tpJustEnteredShort
     tpLong = (strategy.position_size > 0)
     tpShort = (strategy.position_size < 0)
     tpQty = int(math.abs(strategy.position_size))
@@ -2893,7 +2897,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
                 alert(exitNowMessage, alert.freq_once_per_bar)
                 exitAlertSentLocal := true
                 tookLocal := true
-    if entryOK and longCondition and tpFlat and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
+    if entryOK and longCondition and tpCanEnterLong and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff
         bool is3m_chart = timeframe.period == "3"
         bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
         float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
@@ -2926,7 +2930,7 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
              '"timestamp":"' + str.tostring(time) + '"' +
              '}'
         alert(longEntryMessage, tpAlertFreq)
-    if entryOK and shortCondition and tpFlat and allowEntryShort and tpEntryQty > 0 and enableTradersPostAlerts_eff
+    if entryOK and shortCondition and tpCanEnterShort and allowEntryShort and tpEntryQty > 0 and enableTradersPostAlerts_eff
         bool is3m_chart = timeframe.period == "3"
         bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
         float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
