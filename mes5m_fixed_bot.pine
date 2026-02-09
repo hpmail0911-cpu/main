@@ -369,11 +369,7 @@ tpSendEODExitAlert = input.bool(true, "TradersPost: send EXIT at end-of-day", gr
 tpStrategyName = input.string("V16_STRICT_DIRECTION", "TradersPost: strategy name", group="TradersPost Router")
 tpNumericFormat = input.string("strings", "TradersPost: numeric format", options=["strings", "numbers"], group="TradersPost Router")
 tpInstanceTag = input.string("AUTO", "TradersPost: instance tag (for matching alerts to trades)", group="TradersPost Router")
-tpAlertGroup = "TradersPost Alerts (Diagnostics)"
-enablePreEntryAlerts = input.bool(true, "Send entry alert before strategy.entry", group=tpAlertGroup)
-enableEmergencyBypass = input.bool(false, "Emergency alert bypass (entry only)", group=tpAlertGroup)
-enableAlertDiagnostics = input.bool(false, "Show alert diagnostics table", group=tpAlertGroup)
-enableForceTestAlerts = input.bool(false, "Force test alert every bar", group=tpAlertGroup)
+enablePreEntryAlerts = true
 enableTradersPostAlerts_eff = forceTradersPostAlerts ? true : enableTradersPostAlerts
 tpNum(x) =>
     tpNumericFormat == "numbers" ? str.tostring(x) : '"' + str.tostring(x) + '"'
@@ -1685,12 +1681,10 @@ var string activeSignalType = "NONE"
 var bool exitIssuedThisBar = false
 var string lastExitReason = "NONE"
 var bool exitAlertSentThisBar = false
-var bool entryAlertSentThisBar = false
 if barstate.isnew
     tookTradeThisBar := false
     exitIssuedThisBar := false
     exitAlertSentThisBar := false
-    entryAlertSentThisBar := false
 bool canEnterNewPosition = strategy.position_size == 0
 maxDailyTrades_eff = (isMNQ_3m or isMNQ_5m) ? mnqMaxDailyTrades : maxDailyTrades
 maxTradesReached = enableDailyTradeLimit and todayTradeCount >= maxDailyTrades_eff
@@ -2049,7 +2043,6 @@ if longCondition and strategy.position_size == 0 and allowEntryLong and finalCon
              '}'
         preEntryFreq = entryTimingMode_eff == "Bar Close" ? alert.freq_once_per_bar_close : alert.freq_once_per_bar
         alert(preEntryMsg, preEntryFreq)
-        entryAlertSentThisBar := true
         tpTradeId := preEntryTradeId
     if enableBestSideRouter and not bypassLong and not bypassShort
         biasDir := 1
@@ -2102,7 +2095,6 @@ if shortCondition and strategy.position_size == 0 and allowEntryShort and finalC
              '}'
         preEntryFreq = entryTimingMode_eff == "Bar Close" ? alert.freq_once_per_bar_close : alert.freq_once_per_bar
         alert(preEntryMsg, preEntryFreq)
-        entryAlertSentThisBar := true
         tpTradeId := preEntryTradeId
     if enableBestSideRouter and not bypassLong and not bypassShort
         biasDir := -1
@@ -2974,72 +2966,6 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
                 alert(exitNowMessage, alert.freq_once_per_bar)
                 exitAlertSentLocal := true
                 tookLocal := true
-    if entryOK and entrySignalLongForAlert and tpCanEnterLong and allowEntryLong and tpEntryQty > 0 and enableTradersPostAlerts_eff and not entryAlertSentThisBar
-        bool is3m_chart = timeframe.period == "3"
-        bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
-        float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
-        float currentTP1_pts = isMES ? mesTP_pts : (useMnq3m ? mnq_customTP1_3m : mnq_customTP1)
-        if useManualDollarOverrides and manualDollarSL > 0
-            currentSL_pts := manualDollarSL / safePointValue
-        if useManualDollarOverrides and manualDollarTP > 0
-            currentTP1_pts := manualDollarTP / safePointValue
-        localSL = tpExecPrice - currentSL_pts
-        localTP1 = tpExecPrice + currentTP1_pts
-        slDol = useManualDollarOverrides and manualDollarSL > 0 ? manualDollarSL : (currentSL_pts * safePointValue)
-        tpDol = useManualDollarOverrides and manualDollarTP > 0 ? manualDollarTP : (currentTP1_pts * safePointValue)
-        entrySigId = tpSignalId("buy", "LONG")
-        tradeIdLocal := entrySigId
-        longEntryMessage = '{' +
-             '"ticker":"' + actualTicker + '",' +
-             '"action":"buy",' +
-             '"quantity":' + tpNumInt(tpEntryQty) + ',' +
-             '"price":' + tpNum(tpExecPrice) + ',' +
-             '"orderType":"limit",' +
-             '"limit":' + tpNum(tpExecPrice) + ',' +
-             '"takeProfit":{"limitPrice":' + tpNum(localTP1) + '},' +
-             '"stopLoss":{"stopPrice":' + tpNum(localSL) + '},' +
-             '"trade_id":"' + tradeIdLocal + '",' +
-             '"instance":"' + tpInstTag + '",' +
-             '"strategy":"' + tpStrategyName + '",' +
-             '"timeframe":"' + timeframe.period + '",' +
-             '"instrument":"' + instrumentName + '",' +
-             '"signal_id":"' + entrySigId + '",' +
-             '"timestamp":"' + str.tostring(time) + '"' +
-             '}'
-        alert(longEntryMessage, tpAlertFreq)
-    if entryOK and entrySignalShortForAlert and tpCanEnterShort and allowEntryShort and tpEntryQty > 0 and enableTradersPostAlerts_eff and not entryAlertSentThisBar
-        bool is3m_chart = timeframe.period == "3"
-        bool useMnq3m = isMNQ and is3m_chart and mnq_useCustom3m
-        float currentSL_pts = isMES ? mesSL_pts : (useMnq3m ? mnq_customSL_3m : mnq_customSL)
-        float currentTP1_pts = isMES ? mesTP_pts : (useMnq3m ? mnq_customTP1_3m : mnq_customTP1)
-        if useManualDollarOverrides and manualDollarSL > 0
-            currentSL_pts := manualDollarSL / safePointValue
-        if useManualDollarOverrides and manualDollarTP > 0
-            currentTP1_pts := manualDollarTP / safePointValue
-        localSL = tpExecPrice + currentSL_pts
-        localTP1 = tpExecPrice - currentTP1_pts
-        slDol = useManualDollarOverrides and manualDollarSL > 0 ? manualDollarSL : (currentSL_pts * safePointValue)
-        tpDol = useManualDollarOverrides and manualDollarTP > 0 ? manualDollarTP : (currentTP1_pts * safePointValue)
-        entrySigId = tpSignalId("sell", "SHORT")
-        tradeIdLocal := entrySigId
-        shortEntryMessage = '{' +
-             '"ticker":"' + actualTicker + '",' +
-             '"action":"sell",' +
-             '"quantity":' + tpNumInt(tpEntryQty) + ',' +
-             '"price":' + tpNum(tpExecPrice) + ',' +
-             '"orderType":"limit",' +
-             '"limit":' + tpNum(tpExecPrice) + ',' +
-             '"takeProfit":{"limitPrice":' + tpNum(localTP1) + '},' +
-             '"stopLoss":{"stopPrice":' + tpNum(localSL) + '},' +
-             '"trade_id":"' + tradeIdLocal + '",' +
-             '"instance":"' + tpInstTag + '",' +
-             '"strategy":"' + tpStrategyName + '",' +
-             '"timeframe":"' + timeframe.period + '",' +
-             '"instrument":"' + instrumentName + '",' +
-             '"signal_id":"' + entrySigId + '",' +
-             '"timestamp":"' + str.tostring(time) + '"' +
-             '}'
-        alert(shortEntryMessage, tpAlertFreq)
     if tpSendEODExitAlert and useEndOfDayExits and eodWindowStart and enableTradersPostAlerts_eff and strategy.position_size != 0 and not tookLocal
         exitSigId = tpSignalId("exit", strategy.position_size > 0 ? "LONG" : "SHORT")
         exitPrice = close
@@ -3062,17 +2988,6 @@ f_traderspostAlerts(_tpTradeId, _tookTrade) =>
         exitAlertSentLocal := true
         tookLocal := true
     [tradeIdLocal, tookLocal, exitAlertSentLocal]
-if enableEmergencyBypass and enableTradersPostAlerts_eff and barstate.isconfirmed and not entryAlertSentThisBar
-    if entrySignalLongForAlert and strategy.position_size[1] == 0 and finalContractQty > 0
-        emergencySigId = str.tostring(time) + "_" + str.tostring(bar_index) + "_EMERGENCY_BUY"
-        emergencyMsg = '{"ticker":"' + actualTicker + '","action":"buy","quantity":' + str.tostring(finalContractQty) + ',"price":' + str.tostring(close) + ',"strategy":"EMERGENCY","instrument":"' + instrumentName + '","signal_id":"' + emergencySigId + '"}'
-        alert(emergencyMsg, alert.freq_once_per_bar_close)
-        entryAlertSentThisBar := true
-    if entrySignalShortForAlert and strategy.position_size[1] == 0 and finalContractQty > 0
-        emergencySigId = str.tostring(time) + "_" + str.tostring(bar_index) + "_EMERGENCY_SELL"
-        emergencyMsg = '{"ticker":"' + actualTicker + '","action":"sell","quantity":' + str.tostring(finalContractQty) + ',"price":' + str.tostring(close) + ',"strategy":"EMERGENCY","instrument":"' + instrumentName + '","signal_id":"' + emergencySigId + '"}'
-        alert(emergencyMsg, alert.freq_once_per_bar_close)
-        entryAlertSentThisBar := true
 [newTradeIdTmp, newTookTmp, newExitAlertTmp] = f_traderspostAlerts(tpTradeId, tookTradeThisBar)
 tpTradeId := newTradeIdTmp
 tookTradeThisBar := newTookTmp
@@ -3082,20 +2997,3 @@ if enableTradersPostAlerts_eff and exitIssuedThisBar and not exitAlertSentThisBa
     alert(tpExitWebhook(fallbackReason), alert.freq_once_per_bar)
     exitAlertSentThisBar := true
     tookTradeThisBar := true
-if enableForceTestAlerts and enableTradersPostAlerts_eff and barstate.isconfirmed
-    testMsg = '{"ticker":"' + actualTicker + '","action":"test","timestamp":"' + str.tostring(time) + '","bar":"' + str.tostring(bar_index) + '"}'
-    alert(testMsg, alert.freq_once_per_bar_close)
-if enableAlertDiagnostics and barstate.isconfirmed and (entrySignalLongForAlert or entrySignalShortForAlert)
-    var table diagTable = table.new(position.bottom_right, 2, 6, bgcolor=color.new(color.black, 0), border_width=1)
-    table.cell(diagTable, 0, 0, "enableTradersPostAlerts", text_color=color.white)
-    table.cell(diagTable, 1, 0, str.tostring(enableTradersPostAlerts_eff), text_color=enableTradersPostAlerts_eff ? color.lime : color.red)
-    table.cell(diagTable, 0, 1, "entryOK", text_color=color.white)
-    table.cell(diagTable, 1, 1, str.tostring(entryOK), text_color=entryOK ? color.lime : color.red)
-    table.cell(diagTable, 0, 2, "longCondition", text_color=color.white)
-    table.cell(diagTable, 1, 2, str.tostring(entrySignalLongForAlert), text_color=entrySignalLongForAlert ? color.lime : color.red)
-    table.cell(diagTable, 0, 3, "shortCondition", text_color=color.white)
-    table.cell(diagTable, 1, 3, str.tostring(entrySignalShortForAlert), text_color=entrySignalShortForAlert ? color.lime : color.red)
-    table.cell(diagTable, 0, 4, "tookTradeThisBar", text_color=color.white)
-    table.cell(diagTable, 1, 4, str.tostring(tookTradeThisBar), text_color=tookTradeThisBar ? color.orange : color.lime)
-    table.cell(diagTable, 0, 5, "position_size", text_color=color.white)
-    table.cell(diagTable, 1, 5, str.tostring(strategy.position_size), text_color=color.yellow)
