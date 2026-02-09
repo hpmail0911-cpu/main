@@ -23,7 +23,7 @@ requireBodyStrength = input.bool(false, "Require Body Strength (avoid tiny dojis
 minBodyPctOfATR = input.float(0.10, "Min Body % of ATR (if enabled)", minval=0.0, maxval=1.0, step=0.01, group=group_entryConfirm)
 
 // Avoid common NY open whipsaw window (ET)
-avoidNYOpenMinutes = input.int(20, "Avoid first N minutes after NY Open (ET)", minval=0, maxval=90, group=group_entryConfirm, tooltip="Helps reduce early-session whipsaws like the MNQ losses shown. Set 0 to disable.")
+avoidNYOpenMinutes = input.int(30, "Avoid first N minutes after NY Open (ET)", minval=0, maxval=90, group=group_entryConfirm, tooltip="Helps reduce early-session whipsaws like the MNQ losses shown. Set 0 to disable.")
 avoidNYOpenAppliesTo = input.string("IndexFutures", "Apply NY Open Avoid To", options=["All", "IndexFutures", "None"], group=group_entryConfirm)
 
 // === IMPULSE OVERRIDE ===
