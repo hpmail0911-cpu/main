@@ -331,6 +331,7 @@ enableMNQSafetyGate = input.bool(true, "Enable MNQ Safety Gate", group=mnqSafety
 mnqMinADX = input.float(22.0, "MNQ Min ADX", minval=10.0, maxval=40.0, group=mnqSafetyGroup)
 mnqMinBBWidth = input.float(0.018, "MNQ Min BB Width", minval=0.005, maxval=0.05, step=0.001, group=mnqSafetyGroup)
 mnqMinMTFAlign = input.int(99, "MNQ Min MTF Alignment %", minval=0, maxval=100, group=mnqSafetyGroup)
+mnqRegularSessionOnly = input.bool(true, "MNQ: Regular Session Only (ET 09:30-16:00)", group=mnqSafetyGroup, tooltip="Blocks MNQ signals outside NY session to avoid premarket chop/whipsaws. Turn OFF if you truly want 24/7 MNQ.")
 
 priceDiffToDollars(p1, p2) =>
     math.abs(p1 - p2) * syminfo.pointvalue
@@ -826,7 +827,8 @@ maxLossReached = dailyPnL <= -(strategy.equity * maxDailyLoss / 100)
 maxTradesReached = enableDailyTradeLimit and todayTradeCount >= maxDailyTrades
 
 // MNQ anti-whipsaw gate
-mnqSafetyOK = not (enableMNQSafetyGate and isMNQ) or ((adxValue >= mnqMinADX and bbWidth >= mnqMinBBWidth and mtf_alignment_pct >= mnqMinMTFAlign) or impulseLong or impulseShort or hasStrongTrendOverrideBull or hasStrongTrendOverrideBear)
+mnqSessionOK = not (isMNQ and mnqRegularSessionOnly) or isNYSession
+mnqSafetyOK = not (enableMNQSafetyGate and isMNQ) or (mnqSessionOK and ((adxValue >= mnqMinADX and bbWidth >= mnqMinBBWidth and mtf_alignment_pct >= mnqMinMTFAlign) or impulseLong or impulseShort or hasStrongTrendOverrideBull or hasStrongTrendOverrideBear))
 
 ultraBuyCondition = ultraBuySignal and not isEndOfDay and not instrumentRiskLimitReached and canTradeNow and mnqSafetyOK
 ultraSellCondition = ultraSellSignal and not isEndOfDay and not instrumentRiskLimitReached and canTradeNow and mnqSafetyOK
