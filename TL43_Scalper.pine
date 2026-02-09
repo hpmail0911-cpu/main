@@ -42,11 +42,11 @@ entryQualityGroup = "Entry Quality Guard"
 
 enableEntryQualityGuard = input.bool(true, "Enable Entry Quality Guard", group=entryQualityGroup)
 
-minTrendStrength = input.float(0.12, "Min Trend Strength", minval=0.05, maxval=0.30, step=0.01, group=entryQualityGroup)
+minTrendStrength = input.float(0.15, "Min Trend Strength", minval=0.05, maxval=0.30, step=0.01, group=entryQualityGroup)
 
 minVolumeMultiplier = input.float(1.0, "Min Volume vs MA", minval=0.7, maxval=2.0, step=0.05, group=entryQualityGroup)
 
-minMtfAlign = input.int(75, "Min MTF Align %", minval=50, maxval=100, group=entryQualityGroup)
+minMtfAlign = input.int(85, "Min MTF Align %", minval=50, maxval=100, group=entryQualityGroup)
 
 blockRangingTrades = input.bool(true, "Block Ranging Trades", group=entryQualityGroup)
 
@@ -148,7 +148,7 @@ enableLossGuard = input.bool(true, "Enable Loss Guard", group=lossGuardGroup)
 
 maxConsecutiveLosses = input.int(1, "Max Consecutive Losses", minval=0, maxval=5, group=lossGuardGroup)
 
-lossCooldownBars = input.int(15, "Cooldown Bars After Loss", minval=0, maxval=200, group=lossGuardGroup)
+lossCooldownBars = input.int(3, "Cooldown Bars After Loss", minval=0, maxval=200, group=lossGuardGroup)
 
 // === MAE PROTECTION VARIABLES ===
 
