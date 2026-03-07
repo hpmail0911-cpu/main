@@ -1407,6 +1407,21 @@ except ImportError:
     scan_all = None
     logger.warning("signal_detector not available — pattern detection disabled")
 
+try:
+    from instrument_config import (
+        get_current_session as _get_session,
+        get_active_instruments as _get_active,
+        log_config_summary as _log_cfg,
+        get_instrument_session_config as _get_inst_cfg,
+    )
+    _INST_CFG = True
+except ImportError:
+    _INST_CFG = False
+    def _get_session(): return 'NY'
+    def _get_active(s=None): return ALL_INSTRUMENTS
+    def _log_cfg(): return ''
+    def _get_inst_cfg(i, s=None): return None
+
 
 # ==============================================================================
 # SCAN LOOP — continuously scan all instruments/timeframes for signals
@@ -1513,16 +1528,27 @@ def run_scan_cycle(market_context: Dict = None, sentiment: Dict = None):
 
 
 def run_scanner_loop():
-    """Main scanner loop — runs continuously, scanning every 60 seconds."""
+    """Main scanner loop — runs continuously, scanning every 60 seconds.
+
+    Session-aware: automatically detects NY/London/Asia/UAE session and
+    only scans instruments+timeframes enabled for that session.
+    Commodities (MCL, MGC) trade all sessions.
+    Equities (MES, MNQ) trade NY + London.
+    Secondary equities (MYM, M2K) trade NY only with stricter gates.
+    """
     logger.info("="*80)
-    logger.info("CHART SCANNER STARTED — scanning for signals")
+    logger.info("CHART SCANNER V5.0 — SESSION-AWARE INSTRUMENT-SPECIFIC")
+    logger.info("="*80)
+    if _INST_CFG:
+        logger.info(_log_cfg())
+    else:
+        logger.info("  (instrument_config not available — using defaults)")
     logger.info("  Patterns: TREND_PULLBACK, MOMENTUM_CONT, BREAKOUT,")
     logger.info("            IMPULSE, TREND_RESUMPTION, EMA_CROSSOVER")
     logger.info("  Regime:   TRADE trending/continuation/momentum")
     logger.info("            BLOCK sideways/consolidating/ranging/choppy")
     logger.info("            EXEMPT breakout/impulse in any regime")
     logger.info("  MTF:      2-of-3 higher timeframes must confirm")
-    logger.info("  Quality:  minimum 65/100 to send signal")
     logger.info("="*80)
 
     init_groq()
@@ -1531,10 +1557,23 @@ def run_scanner_loop():
     init_trade_journal_db()
 
     cycle = 0
+    _last_session = ''
     while True:
         try:
             cycle += 1
-            logger.info(f"\n--- Scan cycle {cycle} @ {datetime.now().strftime('%H:%M:%S')} ---")
+            session = _get_session()
+            active = _get_active(session)
+
+            if session != _last_session:
+                logger.info(f"\n{'='*60}")
+                logger.info(f"SESSION CHANGE: {_last_session or 'startup'} → {session}")
+                logger.info(f"  Active instruments: {', '.join(active)}")
+                logger.info(f"{'='*60}")
+                _last_session = session
+
+            logger.info(f"\n--- Cycle {cycle} [{session}] "
+                        f"@ {datetime.now().strftime('%H:%M:%S')} "
+                        f"— {', '.join(active)} ---")
 
             clear_data_cache()
             prefetch_all_data()
@@ -1546,7 +1585,7 @@ def run_scanner_loop():
             executed = run_scan_cycle(market_context, sentiment)
 
             if executed > 0:
-                logger.info(f"Cycle {cycle}: {executed} signal(s) executed")
+                logger.info(f"Cycle {cycle} [{session}]: {executed} signal(s) executed")
             else:
                 logger.info(f"Cycle {cycle}: no signals")
 

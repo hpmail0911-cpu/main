@@ -40,6 +40,15 @@ from validator_market_conditions import (
     get_max_stop_distance,
     INSTRUMENT_CONFIG,
 )
+try:
+    from instrument_config import (
+        get_current_session as _get_session,
+        get_instrument_session_config as _get_inst_cfg,
+        INSTRUMENTS as _INSTRUMENTS,
+    )
+    _INST_CFG_AVAILABLE = True
+except ImportError:
+    _INST_CFG_AVAILABLE = False
 
 
 # ==============================================================================
@@ -145,14 +154,23 @@ GAP_COOLDOWN_MINUTES = 10
 MIN_SPY_CORRELATION = 0.7
 MAX_CHOP_INDEX = 60
 
-POSITION_EXPIRY_BY_INSTRUMENT = {
-    'MNQ': 30,
-    'MES': 30,
-    'MYM': 30,
-    'M2K': 30,
-    'MGC': 60,
-    'MCL': 60,
-}
+def _build_expiry_map() -> dict:
+    """Build position expiry map from instrument_config if available."""
+    defaults = {'MNQ': 30, 'MES': 30, 'MYM': 30, 'M2K': 30, 'MGC': 60, 'MCL': 60}
+    if not _INST_CFG_AVAILABLE:
+        return defaults
+    try:
+        session = _get_session()
+        for inst in _INSTRUMENTS:
+            cfg = _get_inst_cfg(inst, session)
+            if cfg:
+                defaults[inst] = cfg.get('position_expiry_min', defaults.get(inst, 30))
+    except Exception:
+        pass
+    return defaults
+
+
+POSITION_EXPIRY_BY_INSTRUMENT = _build_expiry_map()
 POSITION_EXPIRY_DEFAULT_MINUTES = 30
 
 STRATEGY_RISK_PARAMS = {
@@ -1060,9 +1078,9 @@ def reset_positions():
 
 if __name__ == '__main__':
     logger.info("="*80)
-    logger.info("🚀 ULTIMATE ENTRY VALIDATOR")
+    logger.info("ULTIMATE ENTRY VALIDATOR — SESSION-AWARE")
     logger.info("="*80)
-    logger.info("🛡️ VALIDATION LAYERS:")
+    logger.info("VALIDATION LAYERS:")
     logger.info("   1. Risk Management (SL/TP/position size — stop capped at instrument max)")
     logger.info("   2. Time Filters (instrument-aware sessions)")
     logger.info("   3. Daily Limits (max losses/profit target/drawdown)")
@@ -1072,15 +1090,31 @@ if __name__ == '__main__':
     logger.info("   7. Volatility (ATR range)")
     logger.info("   8. Whipsaw Protection (ADX/Chop)")
     logger.info("   9. Setup Quality (0-100 score)")
-    logger.info("  10. Market Conditions (trending/momentum only)")
+    logger.info("  10. Market Conditions (trending/momentum/breakout/impulse)")
     logger.info("  11. AI Market Analysis (60%+ confidence)")
     logger.info("="*80)
 
-    for sym, cfg in sorted(INSTRUMENT_CONFIG.items()):
-        max_risk = cfg['max_stop_pts'] * cfg['dollar_per_pt']
-        logger.info(f"⚡ {sym}: max stop {cfg['max_stop_pts']} pts (${max_risk:.0f}) | "
-                    f"expiry {POSITION_EXPIRY_BY_INSTRUMENT.get(sym, POSITION_EXPIRY_DEFAULT_MINUTES)} min")
-    logger.info(f"⚡ Quick unblock: curl http://localhost:8765/reset_positions")
+    if _INST_CFG_AVAILABLE:
+        session = _get_session()
+        logger.info(f"Current session: {session}")
+        for inst in ['MCL', 'MGC', 'MES', 'MNQ', 'MYM', 'M2K']:
+            cfg = _get_inst_cfg(inst, session)
+            ic = INSTRUMENT_CONFIG.get(inst, {})
+            max_risk = ic.get('max_stop_pts', 0) * ic.get('dollar_per_pt', 0)
+            if cfg:
+                logger.info(f"  {inst}: ACTIVE | ADX>={cfg['adx_min']} Q>={cfg['quality_min']} "
+                            f"SL={ic.get('max_stop_pts', 0)} pts (${max_risk:.0f}) "
+                            f"expiry={cfg['position_expiry_min']}m "
+                            f"TF={','.join(cfg['timeframes'])}")
+            else:
+                logger.info(f"  {inst}: DISABLED in {session}")
+    else:
+        for sym, cfg in sorted(INSTRUMENT_CONFIG.items()):
+            max_risk = cfg['max_stop_pts'] * cfg['dollar_per_pt']
+            logger.info(f"  {sym}: max stop {cfg['max_stop_pts']} pts (${max_risk:.0f}) | "
+                        f"expiry {POSITION_EXPIRY_BY_INSTRUMENT.get(sym, POSITION_EXPIRY_DEFAULT_MINUTES)} min")
+
+    logger.info(f"Quick unblock: curl http://localhost:8765/reset_positions")
     logger.info("="*80)
 
     init_database()

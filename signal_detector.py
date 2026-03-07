@@ -47,6 +47,16 @@ except ImportError:
 
 from data_feed import get_ohlcv, TF_CONFIG
 
+try:
+    from instrument_config import (
+        get_current_session, get_instrument_session_config,
+        get_scan_plan, get_active_instruments, is_pattern_allowed,
+        get_quality_gate, get_adx_threshold, INSTRUMENTS,
+    )
+    _INST_CFG_AVAILABLE = True
+except ImportError:
+    _INST_CFG_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # ==========================================================================
@@ -809,8 +819,12 @@ BREAKOUT_PATTERNS = frozenset({'BREAKOUT', 'IMPULSE'})
 
 
 def detect_signal(instrument: str, timeframe: str,
-                  df: 'pd.DataFrame' = None) -> Optional[Signal]:
+                  df: 'pd.DataFrame' = None,
+                  session: str = None) -> Optional[Signal]:
     """Analyze a chart and return a Signal if a high-probability setup is found.
+
+    Uses instrument_config for session-aware ADX thresholds, quality gates,
+    allowed patterns, and ATR multipliers when available.
 
     Parameters
     ----------
@@ -820,12 +834,24 @@ def detect_signal(instrument: str, timeframe: str,
         e.g. '5m', '15m', '1h'
     df : pd.DataFrame, optional
         Pre-fetched OHLCV data. If None, fetched via data_feed.
+    session : str, optional
+        Trading session ('NY', 'LONDON', 'ASIA', 'UAE'). Auto-detected if None.
 
     Returns
     -------
     Signal or None
         Fully qualified signal with entry/SL/TP/quality, or None if no setup.
     """
+    # Load session-specific config if available
+    inst_cfg = None
+    if _INST_CFG_AVAILABLE:
+        if session is None:
+            session = get_current_session()
+        inst_cfg = get_instrument_session_config(instrument, session)
+        if inst_cfg is None:
+            logger.debug(f"{instrument} disabled in {session} session")
+            return None
+
     if df is None:
         df = get_ohlcv(instrument, timeframe)
 
@@ -834,6 +860,9 @@ def detect_signal(instrument: str, timeframe: str,
 
     ind = _compute_indicators(df)
     regime = classify_regime(ind, instrument)
+
+    # Use session-specific ADX threshold
+    session_adx_min = inst_cfg['adx_min'] if inst_cfg else ADX_TRENDING
 
     # Try each pattern detector in priority order
     detection = None
@@ -852,9 +881,22 @@ def detect_signal(instrument: str, timeframe: str,
 
     direction, pattern = detection
 
+    # Session-specific pattern filter
+    if inst_cfg and pattern not in BREAKOUT_PATTERNS:
+        allowed_patterns = inst_cfg.get('patterns', [])
+        if allowed_patterns and pattern not in allowed_patterns:
+            logger.debug(f"{instrument} {timeframe}: {pattern} not allowed in {session}")
+            return None
+
     # Enforce regime rules: block non-breakout patterns in bad regimes
     if pattern not in BREAKOUT_PATTERNS and not regime.is_tradeable:
         logger.debug(f"{instrument} {timeframe}: {pattern} blocked — regime {regime.state}")
+        return None
+
+    # Session-specific ADX check for non-breakout patterns
+    if pattern not in BREAKOUT_PATTERNS and regime.adx < session_adx_min:
+        logger.debug(f"{instrument} {timeframe}: ADX {regime.adx:.1f} < "
+                     f"{session_adx_min} ({session}) — skipped")
         return None
 
     # MTF confirmation (breakout patterns need only 1-of-2)
@@ -872,8 +914,11 @@ def detect_signal(instrument: str, timeframe: str,
     sl, tp = calculate_sl_tp(instrument, direction, entry, ind, pattern)
     quality = score_signal(ind, regime, mtf, pattern, direction)
 
-    if quality < 65:
-        logger.debug(f"{instrument} {timeframe}: quality {quality} < 65 — skipped")
+    # Session-specific quality gate
+    quality_min = inst_cfg['quality_min'] if inst_cfg else 65
+    if quality < quality_min:
+        logger.debug(f"{instrument} {timeframe}: quality {quality} < "
+                     f"{quality_min} ({session}) — skipped")
         return None
 
     close_now = float(ind['close'].iloc[-1])
@@ -886,6 +931,7 @@ def detect_signal(instrument: str, timeframe: str,
     vol_val = float(ind['vol_ratio'].iloc[-1]) if not np.isnan(ind['vol_ratio'].iloc[-1]) else 1.0
 
     is_bull = direction == 'buy'
+    session_label = session or 'UNKNOWN'
 
     signal = Signal(
         instrument=instrument,
@@ -906,7 +952,8 @@ def detect_signal(instrument: str, timeframe: str,
         ema_aligned_1m=is_bull,
         ema_aligned_5m=is_bull,
         ema_aligned_15m=is_bull if mtf.aligned_count >= 2 else not is_bull,
-        reason=f"{pattern} in {regime.state} | ADX={adx_val:.0f} RSI={rsi_val:.0f} "
+        reason=f"{pattern} in {regime.state} [{session_label}] | "
+               f"ADX={adx_val:.0f} RSI={rsi_val:.0f} "
                f"Vol={vol_val:.1f}x | MTF {mtf.aligned_count}/{mtf.total_checked}",
     )
 
@@ -918,24 +965,54 @@ def detect_signal(instrument: str, timeframe: str,
 # ==========================================================================
 
 def scan_all(instruments: List[str] = None,
-             timeframes: List[str] = None) -> List[Signal]:
-    """Scan all instrument/timeframe combos and return detected signals."""
-    instruments = instruments or ALL_INSTRUMENTS
-    timeframes = timeframes or SCAN_TIMEFRAMES
+             timeframes: List[str] = None,
+             session: str = None) -> List[Signal]:
+    """Scan instrument/timeframe combos and return detected signals.
+
+    When instrument_config is available, uses session-aware scan plan that
+    only scans instruments/timeframes enabled for the current session.
+    Commodities (MCL, MGC) are scanned first, then primary equities
+    (MES, MNQ), then secondary equities (MYM, M2K).
+    """
     signals = []
 
-    for instrument in instruments:
-        for tf in timeframes:
+    if _INST_CFG_AVAILABLE and instruments is None and timeframes is None:
+        if session is None:
+            session = get_current_session()
+        plan = get_scan_plan(session)
+        logger.info(f"  Session: {session} — scanning {len(plan)} combos "
+                     f"({', '.join(sorted(set(p['instrument'] for p in plan)))})")
+
+        for item in plan:
             try:
-                sig = detect_signal(instrument, tf)
+                sig = detect_signal(item['instrument'], item['timeframe'],
+                                    session=session)
                 if sig:
                     signals.append(sig)
                     logger.info(
-                        f"  DETECTED: {sig.instrument} {tf} {sig.direction.upper()} "
-                        f"— {sig.pattern} Q={sig.quality_score} | {sig.reason}"
+                        f"  DETECTED: {sig.instrument} {item['timeframe']} "
+                        f"{sig.direction.upper()} — {sig.pattern} "
+                        f"Q={sig.quality_score} | {sig.reason}"
                     )
             except Exception as e:
-                logger.debug(f"Scan error {instrument} {tf}: {e}")
+                logger.debug(f"Scan error {item['instrument']} "
+                             f"{item['timeframe']}: {e}")
+    else:
+        instruments = instruments or ALL_INSTRUMENTS
+        timeframes = timeframes or SCAN_TIMEFRAMES
+        for instrument in instruments:
+            for tf in timeframes:
+                try:
+                    sig = detect_signal(instrument, tf, session=session)
+                    if sig:
+                        signals.append(sig)
+                        logger.info(
+                            f"  DETECTED: {sig.instrument} {tf} "
+                            f"{sig.direction.upper()} — {sig.pattern} "
+                            f"Q={sig.quality_score} | {sig.reason}"
+                        )
+                except Exception as e:
+                    logger.debug(f"Scan error {instrument} {tf}: {e}")
 
     signals.sort(key=lambda s: s.quality_score, reverse=True)
     return signals
