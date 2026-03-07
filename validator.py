@@ -54,7 +54,8 @@ except ImportError:
 # ==============================================================================
 # TRADERSPOST CONFIGURATION
 # ==============================================================================
-TRADERSPOST_WEBHOOK = (
+TRADERSPOST_WEBHOOK = os.getenv(
+    "TRADERSPOST_WEBHOOK",
     "https://webhooks.traderspost.io/trading/webhook/"
     "40eea1cf-bea2-4c17-91c5-c420ac82fe4d/"
     "c76209cc75f83179acacac7c16ffc8f4"
