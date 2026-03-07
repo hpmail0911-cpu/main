@@ -1395,12 +1395,173 @@ def send_signal(strategy, instrument, action, quality_score=0, pattern='basic_cr
         return False
 
 # ==============================================================================
-# NOTE: detect_signal and remaining pattern detection functions are loaded
-# from the user's existing codebase. This file focuses on the critical fixes:
-#   - calculate_sl_tp uses prop-firm limits (FIX-6)
-#   - risk_config.json integration
-#   - All infrastructure functions preserved
+# SIGNAL DETECTION — delegates to signal_detector.py
 # ==============================================================================
+
+try:
+    from signal_detector import detect_signal, scan_all, classify_regime, Signal
+    _DETECTOR_AVAILABLE = True
+except ImportError:
+    _DETECTOR_AVAILABLE = False
+    detect_signal = None
+    scan_all = None
+    logger.warning("signal_detector not available — pattern detection disabled")
+
+
+# ==============================================================================
+# SCAN LOOP — continuously scan all instruments/timeframes for signals
+# ==============================================================================
+
+SCAN_INTERVAL_SECONDS_MAIN = 60
+_LAST_SIGNALS: dict = {}
+_SIGNAL_COOLDOWN_MINUTES = 15
+
+
+def _signal_on_cooldown(instrument: str, direction: str) -> bool:
+    key = f"{instrument}_{direction}"
+    last = _LAST_SIGNALS.get(key)
+    if last and (datetime.now() - last).total_seconds() < _SIGNAL_COOLDOWN_MINUTES * 60:
+        return True
+    return False
+
+
+def _record_signal_sent(instrument: str, direction: str):
+    _LAST_SIGNALS[f"{instrument}_{direction}"] = datetime.now()
+
+
+def run_scan_cycle(market_context: Dict = None, sentiment: Dict = None):
+    """Run one full scan cycle across all instruments and timeframes.
+
+    For each detected signal:
+      1. Validate via the signal detector (pattern + regime + MTF)
+      2. Check circuit breaker / position limits / dedup
+      3. Send to the validator webhook via send_signal()
+    """
+    if not _DETECTOR_AVAILABLE:
+        logger.warning("Signal detector not available — skipping scan")
+        return 0
+
+    if not check_circuit_breaker():
+        logger.info("Circuit breaker active — skipping scan cycle")
+        return 0
+
+    signals = scan_all()
+    executed = 0
+
+    for sig in signals:
+        if _signal_on_cooldown(sig.instrument, sig.direction):
+            continue
+
+        if is_duplicate(f"DET-{sig.instrument}-{sig.timeframe}",
+                        sig.instrument, sig.direction):
+            continue
+
+        if not can_open_position(sig.instrument, sig.direction):
+            continue
+
+        if _TUNER_AVAILABLE and is_strategy_disabled(f"DET-{sig.instrument}-{sig.timeframe}"):
+            continue
+
+        strategy_name = f"DET-{sig.instrument}-{sig.timeframe}"
+        pattern_score = min(sig.quality_score + 5, 100)
+
+        logger.info(f"\n{'='*60}")
+        logger.info(f"SIGNAL: {sig.instrument} {sig.timeframe} {sig.direction.upper()}")
+        logger.info(f"  Pattern:  {sig.pattern}")
+        logger.info(f"  Regime:   {sig.regime}")
+        logger.info(f"  Quality:  {sig.quality_score}/100")
+        logger.info(f"  Entry:    {sig.entry_price}")
+        logger.info(f"  SL:       {sig.stop_loss}")
+        logger.info(f"  TP:       {sig.take_profit}")
+        logger.info(f"  Reason:   {sig.reason}")
+        logger.info(f"{'='*60}\n")
+
+        success = send_signal(
+            strategy=strategy_name,
+            instrument=sig.instrument,
+            action=sig.direction,
+            quality_score=sig.quality_score,
+            pattern=sig.pattern,
+            pattern_score=pattern_score,
+            position_size=1.0,
+            entry_price=sig.entry_price,
+            stop_loss=sig.stop_loss,
+            take_profit=sig.take_profit,
+            timeframe=sig.timeframe,
+            technical_data={
+                'candle_color': sig.candle_color,
+                'ema_aligned_1m': sig.ema_aligned_1m,
+                'ema_aligned_5m': sig.ema_aligned_5m,
+                'ema_aligned_15m': sig.ema_aligned_15m,
+                'mtf_alignment': sig.mtf_aligned,
+                'atr': sig.atr,
+                'adx': sig.adx,
+                'rsi': sig.rsi,
+                'chop_index': 50.0,
+                'volume_ratio': sig.volume_ratio,
+            }
+        )
+
+        if success:
+            _record_signal_sent(sig.instrument, sig.direction)
+            record_signal(strategy_name, sig.instrument, sig.direction)
+            add_position(sig.instrument, sig.direction, strategy_name,
+                         sig.quality_score, sig.pattern)
+            executed += 1
+
+    return executed
+
+
+def run_scanner_loop():
+    """Main scanner loop — runs continuously, scanning every 60 seconds."""
+    logger.info("="*80)
+    logger.info("CHART SCANNER STARTED — scanning for signals")
+    logger.info("  Patterns: TREND_PULLBACK, MOMENTUM_CONT, BREAKOUT,")
+    logger.info("            IMPULSE, TREND_RESUMPTION, EMA_CROSSOVER")
+    logger.info("  Regime:   TRADE trending/continuation/momentum")
+    logger.info("            BLOCK sideways/consolidating/ranging/choppy")
+    logger.info("            EXEMPT breakout/impulse in any regime")
+    logger.info("  MTF:      2-of-3 higher timeframes must confirm")
+    logger.info("  Quality:  minimum 65/100 to send signal")
+    logger.info("="*80)
+
+    init_groq()
+    init_dedup_db()
+    init_pattern_performance_db()
+    init_trade_journal_db()
+
+    cycle = 0
+    while True:
+        try:
+            cycle += 1
+            logger.info(f"\n--- Scan cycle {cycle} @ {datetime.now().strftime('%H:%M:%S')} ---")
+
+            clear_data_cache()
+            prefetch_all_data()
+
+            market_context = get_market_context()
+            headlines = fetch_market_news()
+            sentiment = llama_analyze_sentiment(headlines)
+
+            executed = run_scan_cycle(market_context, sentiment)
+
+            if executed > 0:
+                logger.info(f"Cycle {cycle}: {executed} signal(s) executed")
+            else:
+                logger.info(f"Cycle {cycle}: no signals")
+
+            if cycle % 10 == 0:
+                log_pattern_performance_summary()
+                log_ai_signal_performance()
+
+            time.sleep(SCAN_INTERVAL_SECONDS_MAIN)
+
+        except KeyboardInterrupt:
+            logger.info("\nScanner stopped by user")
+            break
+        except Exception as e:
+            logger.error(f"Scan cycle error: {e}")
+            time.sleep(SCAN_INTERVAL_SECONDS_MAIN)
 
 # Wire ProjectX client into data_feed
 try:
@@ -1419,11 +1580,22 @@ except Exception as _e:
 
 if __name__ == "__main__":
     logger.info("="*80)
-    logger.info("🚀 ULTIMATE AI CHART SCANNER V4.5 - PROP-FIRM SAFE STOPS")
+    logger.info("ULTIMATE AI CHART SCANNER V5.0 — SIGNAL DETECTION + PROP-FIRM SAFE")
     logger.info("="*80)
     for inst in ['MES', 'MNQ', 'MGC', 'MCL', 'MYM', 'M2K']:
         sl = get_stop_for_instrument(inst)
         tp = get_target_for_instrument(inst)
         tick = get_tick_size(inst)
         logger.info(f"   {inst}: SL={sl} pts | TP={tp} pts | tick={tick}")
+    logger.info(f"   Signal detector: {'ACTIVE' if _DETECTOR_AVAILABLE else 'DISABLED'}")
     logger.info("="*80)
+
+    import sys
+    if '--once' in sys.argv:
+        init_dedup_db()
+        init_pattern_performance_db()
+        init_trade_journal_db()
+        executed = run_scan_cycle()
+        logger.info(f"Single scan: {executed} signal(s) executed")
+    else:
+        run_scanner_loop()

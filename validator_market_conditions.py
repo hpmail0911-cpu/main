@@ -33,7 +33,7 @@ INSTRUMENT_CONFIG: Dict[str, dict] = {
 CHOP_MAX = 61.8
 MTF_MIN_AGREEMENT = 2
 
-ALLOWED_STATES = frozenset({'TRENDING', 'CONTINUATION', 'MOMENTUM', 'BREAKOUT'})
+ALLOWED_STATES = frozenset({'TRENDING', 'CONTINUATION', 'MOMENTUM', 'BREAKOUT', 'IMPULSE'})
 BLOCKED_STATES = frozenset({'SIDEWAYS', 'CONSOLIDATING', 'RANGING', 'CHOPPY'})
 
 
@@ -117,6 +117,35 @@ def get_max_stop_distance(symbol: str) -> float:
 # MARKET-CONDITION VALIDATION
 # ============================================================================
 
+def _is_breakout_or_impulse(alert_data: Dict) -> str:
+    """Detect breakout/impulse from strategy name, pattern, or explicit flag.
+
+    Returns 'BREAKOUT', 'IMPULSE', or '' (not a breakout).
+    """
+    pattern = (alert_data.get('pattern') or '').upper()
+    strategy = (alert_data.get('strategy') or '').upper()
+
+    if pattern == 'IMPULSE':
+        return 'IMPULSE'
+    if pattern == 'BREAKOUT':
+        return 'BREAKOUT'
+
+    if alert_data.get('breakout', False):
+        return 'BREAKOUT'
+
+    breakout_tags = ('ORB', 'BREAKOUT', 'BREAK', 'RANGE', 'IMPULSE')
+    if any(tag in strategy for tag in breakout_tags):
+        return 'BREAKOUT'
+
+    vol_ratio = float(alert_data.get('volume_ratio') or 0)
+    if vol_ratio >= 1.8:
+        adx = float(alert_data.get('adx_1m') or alert_data.get('adx') or 0)
+        if adx >= 15:
+            return 'IMPULSE'
+
+    return ''
+
+
 def _classify_market_state(alert_data: Dict, symbol: str) -> str:
     """Return a regime label for the current market conditions."""
     adx = float(alert_data.get('adx_1m') or alert_data.get('adx') or 0)
@@ -125,12 +154,9 @@ def _classify_market_state(alert_data: Dict, symbol: str) -> str:
     cfg = INSTRUMENT_CONFIG.get(symbol, {})
     adx_min = cfg.get('adx_min', 25)
 
-    is_breakout = alert_data.get('breakout', False) or any(
-        tag in (alert_data.get('strategy') or '').upper()
-        for tag in ('ORB', 'BREAKOUT', 'BREAK', 'RANGE')
-    )
-    if is_breakout:
-        return 'BREAKOUT'
+    breakout_type = _is_breakout_or_impulse(alert_data)
+    if breakout_type:
+        return breakout_type
 
     if chop > CHOP_MAX:
         return 'CHOPPY'
