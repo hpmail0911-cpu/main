@@ -50,7 +50,7 @@ _load_env_now()
 
 PROJECTX_USERNAME   = os.environ.get('PROJECTX_USERNAME')
 PROJECTX_API_KEY    = os.environ.get('PROJECTX_API_KEY') or os.environ.get('PROJECTX_API_SECRET')
-PROJECTX_ACCOUNT_ID = int(os.environ.get('PROJECTX_ACCOUNT_ID', '16129707'))
+PROJECTX_ACCOUNT_ID = int(os.environ.get('PROJECTX_ACCOUNT_ID') or '16129707')
 
 MAE_PERCENTAGE        = 0.80
 STOP_RETRY_ATTEMPTS   = 3
