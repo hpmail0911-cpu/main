@@ -1607,12 +1607,16 @@ try:
     from data_feed import init_feed as _init_feed
     from projectx_api_client import ProjectXClient as _PXC
     import os as _os
-    _px_feed = _PXC(
-        _os.environ.get("PROJECTX_USERNAME", ""),
-        _os.environ.get("PROJECTX_API_KEY", ""),
-        "prod"
-    )
-    _init_feed(_px_feed)
+    _px_user = _os.environ.get("PROJECTX_USERNAME", "")
+    _px_key = _os.environ.get("PROJECTX_API_KEY", "")
+    _px_acct = _os.environ.get("PROJECTX_ACCOUNT_ID", "")
+    if _px_user and _px_key:
+        _px_feed = _PXC(_px_user, _px_key, "prod")
+        _init_feed(_px_feed)
+        if _px_acct:
+            logger.info(f"ProjectX connected: account {_px_acct}")
+    else:
+        logger.info("ProjectX credentials not set — yfinance fallback active")
 except Exception as _e:
     import logging as _lg
     _lg.getLogger(__name__).warning(f"data_feed ProjectX init failed: {_e} — yfinance fallback active")

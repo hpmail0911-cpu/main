@@ -27,12 +27,28 @@ import logging
 import sqlite3
 from datetime import datetime, time, timedelta
 from typing import Dict, Optional, List, Tuple
+import os
+
+def _load_env():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if not os.path.exists(p):
+        return
+    with open(p) as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln or ln.startswith('#') or '=' not in ln:
+                continue
+            k, _, v = ln.partition('=')
+            k = k.strip(); v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+_load_env()
+
 try:
     from market_condition_engine import evaluate_conditions, get_news_status, ConditionState
     _MCE_AVAILABLE = True
 except ImportError:
     _MCE_AVAILABLE = False
-import os
 import threading
 from validator_market_conditions import (
     validate_stop_loss,
@@ -54,10 +70,11 @@ except ImportError:
 # ==============================================================================
 # TRADERSPOST CONFIGURATION
 # ==============================================================================
-TRADERSPOST_WEBHOOK = (
-    "https://webhooks.traderspost.io/trading/webhook/"
-    "40eea1cf-bea2-4c17-91c5-c420ac82fe4d/"
-    "c76209cc75f83179acacac7c16ffc8f4"
+TRADERSPOST_WEBHOOK = os.getenv(
+    'TRADERSPOST_WEBHOOK_URL',
+    'https://webhooks.traderspost.io/trading/webhook/'
+    '40eea1cf-bea2-4c17-91c5-c420ac82fe4d/'
+    'c76209cc75f83179acacac7c16ffc8f4'
 )
 
 try:
@@ -122,7 +139,7 @@ except Exception as e:
 # CONFIGURATION
 # ============================================================================
 
-DB_PATH = "trading_performance.db"
+DB_PATH = os.getenv('DATABASE_PATH', 'trading_performance.db')
 
 MAX_DAILY_LOSSES = 3
 DAILY_PROFIT_TARGET = 500

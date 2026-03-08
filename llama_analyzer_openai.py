@@ -66,8 +66,8 @@ except ImportError:
 
 OPENAI_API_KEY   = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL     = 'gpt-4o-mini'
-OLLAMA_MODEL     = os.getenv('OLLAMA_MODEL', 'llama3')
-OLLAMA_HOST      = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
+OLLAMA_MODEL     = os.getenv('LLAMA_MODEL', os.getenv('OLLAMA_MODEL', 'llama3.1:latest'))
+OLLAMA_HOST      = os.getenv('OLLAMA_URL', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
 MIN_CONFIDENCE   = 0.60
 TECHNICAL_PASS_SCORE = 65
 
