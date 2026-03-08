@@ -235,6 +235,19 @@ except Exception as _te:
     def is_strategy_disabled(s): return False
     def is_strategy_preferred(s): return False
 
+try:
+    from signal_gate import init_gate, gate_signal, get_gate_stats
+    _GATE_AVAILABLE = True
+except ImportError:
+    _GATE_AVAILABLE = False
+
+try:
+    from adaptive_params import get_adaptive_param
+    _ADAPTIVE_AVAILABLE = True
+except ImportError:
+    _ADAPTIVE_AVAILABLE = False
+    def get_adaptive_param(inst, direction, param, default=1.0): return default
+
 warnings.filterwarnings('ignore', message='.*TzCache.*')
 warnings.filterwarnings('ignore', message='.*CookieCache.*')
 
@@ -1666,6 +1679,33 @@ def send_signal(strategy, instrument, action, quality_score=0, mtf_htf1=None, mt
     """Send signal to validation webhook with full payload.
     mtf_htf1/htf2: real per-TF EMA alignment booleans from detect_signal (BUG-02 fix).
     """
+    # ── Signal Gate: Vision AI + Advanced Patterns + Confluence Filter ────
+    if _GATE_AVAILABLE:
+        try:
+            _df_1m = yf.Ticker({'MES':'ES=F','MNQ':'NQ=F','MGC':'GC=F','MCL':'CL=F','MYM':'YM=F','M2K':'RTY=F'}.get(instrument,'ES=F')).history(period='1d', interval='1m')
+            _df_5m = yf.Ticker({'MES':'ES=F','MNQ':'NQ=F','MGC':'GC=F','MCL':'CL=F','MYM':'YM=F','M2K':'RTY=F'}.get(instrument,'ES=F')).history(period='5d', interval='5m')
+            _df_15m = yf.Ticker({'MES':'ES=F','MNQ':'NQ=F','MGC':'GC=F','MCL':'CL=F','MYM':'YM=F','M2K':'RTY=F'}.get(instrument,'ES=F')).history(period='5d', interval='15m')
+            _gate_data = {
+                'action': action.upper().replace('BUY', 'LONG').replace('SELL', 'SHORT'),
+                'quality_score': quality_score, 'pattern': kwargs.get('pattern', ''),
+                'adx': kwargs.get('adx', 0), 'atr': kwargs.get('atr', 0),
+                'volume_ratio': kwargs.get('volume_ratio', 1.0),
+                'mtf_alignment': 3 if (mtf_htf1 and mtf_htf2) else (2 if (mtf_htf1 or mtf_htf2) else 1),
+                'chop_index': kwargs.get('chop_index', 50),
+            }
+            _gate = gate_signal(instrument, _gate_data['action'], _gate_data,
+                                _df_1m, _df_5m, _df_15m)
+            if not _gate['approved']:
+                logger.info(f"⛔ {strategy} {action} BLOCKED by Signal Gate "
+                            f"(confluence={_gate['confluence_score']})")
+                return False
+            if _gate.get('size_multiplier', 1.0) != 1.0:
+                kwargs['position_size'] = max(1, round(kwargs.get('position_size', 1) * _gate['size_multiplier']))
+            logger.info(f"✅ Gate: confluence={_gate['confluence_score']} "
+                        f"AI={_gate['ai_confidence']:.0%}")
+        except Exception as _ge:
+            logger.debug(f"Signal gate error (non-fatal): {_ge}")
+
     try:
         # Fetch live price + ATR for stop/TP calculation
         ticker_map = {'MES':'ES=F','MNQ':'NQ=F','MGC':'GC=F','MCL':'CL=F','MYM':'YM=F','M2K':'RTY=F'}
@@ -1899,6 +1939,9 @@ def scan_all_strategies():
 
 def main():
     """Main scanner loop"""
+    if _GATE_AVAILABLE:
+        init_gate()
+        logger.info("Signal Gate initialized (Vision AI + Advanced Patterns + Confluence Filter)")
     logger.info("="*80)
     logger.info("🚀 ULTIMATE AI CHART SCANNER - 60 STRATEGIES")
     logger.info("="*80)

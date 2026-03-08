@@ -25,8 +25,16 @@ from datetime import datetime, timedelta, timezone
 import logging
 import time
 import os
+import sys
 import requests
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from signal_gate import init_gate, gate_signal
+    _GATE_AVAILABLE = True
+except ImportError:
+    _GATE_AVAILABLE = False
 
 import json
 import os
@@ -597,6 +605,26 @@ def integrate_scalping_with_scanner(main_scanner_func):
 
 def send_scalp_to_validator(scalp: dict) -> bool:
     """Send scalp setup through the entry validator webhook."""
+    if _GATE_AVAILABLE:
+        try:
+            _action = 'LONG' if scalp['direction'] == 'buy' else 'SHORT'
+            _ticker = {'MES':'ES=F','MNQ':'NQ=F','MGC':'GC=F','MCL':'CL=F','M2K':'RTY=F'}.get(scalp['instrument'],'ES=F')
+            _df_1m = yf.Ticker(_ticker).history(period='1d', interval='1m')
+            _df_5m = yf.Ticker(_ticker).history(period='5d', interval='5m')
+            _df_15m = yf.Ticker(_ticker).history(period='5d', interval='15m')
+            _gate_data = {
+                'action': _action, 'quality_score': scalp.get('confidence', 70),
+                'pattern': scalp.get('pattern', 'pullback_continuation'),
+                'adx': 30, 'volume_ratio': 1.5, 'mtf_alignment': 3, 'chop_index': 40,
+            }
+            _gate = gate_signal(scalp['instrument'], _action, _gate_data,
+                                _df_1m, _df_5m, _df_15m)
+            if not _gate['approved']:
+                logger.info(f"⛔ SCALP {scalp['instrument']} BLOCKED by Signal Gate")
+                return False
+        except Exception as _ge:
+            logger.debug(f"Scalp gate error (non-fatal): {_ge}")
+
     payload = {
         'strategy':     f"SCALP-{scalp['instrument']}-1M",
         'ticker':       scalp['instrument'],
@@ -639,8 +667,12 @@ if __name__ == "__main__":
     logger.info("=" * 70)
     logger.info("  MOMENTUM SCALPING SCANNER — CONTINUOUS MODE")
     logger.info("  Sessions: Asia(MGC/MCL) | London | NY Open | Afternoon")
-    logger.info("  Signals → Entry Validator → TradersPost (MFFU + TopStepX)")
+    logger.info("  Signals → Signal Gate → Entry Validator → TradersPost")
     logger.info("=" * 70)
+
+    if _GATE_AVAILABLE:
+        init_gate()
+        logger.info("Signal Gate initialized for scalping scanner")
 
     _sent_signals = {}   # dedup: {instrument: last_sent_time}
     SIGNAL_COOLDOWN = 300  # 5 min between same instrument signals

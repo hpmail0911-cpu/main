@@ -79,6 +79,19 @@ except Exception as _te:
     def is_strategy_disabled(s): return False
     def is_strategy_preferred(s): return False
 
+try:
+    from signal_gate import init_gate, gate_signal, get_gate_stats
+    _GATE_AVAILABLE = True
+except ImportError:
+    _GATE_AVAILABLE = False
+
+try:
+    from adaptive_params import get_adaptive_param
+    _ADAPTIVE_AVAILABLE = True
+except ImportError:
+    _ADAPTIVE_AVAILABLE = False
+    def get_adaptive_param(inst, direction, param, default=1.0): return default
+
 # Suppress yfinance cache warnings
 import warnings
 
@@ -3990,16 +4003,68 @@ def calculate_sl_tp(instrument: str, action: str, entry_price: float, timeframe:
 def send_signal(strategy, instrument, action, quality_score=0, pattern='basic_crossover', pattern_score=65, position_size=1.0, entry_price=None, stop_loss=None, take_profit=None, timeframe='5m', technical_data=None):
     """Send signal to validation webhook with ALL V3.0 enhancements + VALIDATOR REQUIRED DATA"""
     
-    # CRITICAL FILTER: Don't even send low-quality signals to webhook
-    # Only send signals with quality 80+ (top 20% only)
     if quality_score < 80:
         logger.info(f"⏭️  {strategy} {action} SKIPPED - Quality {quality_score} < 80")
         return False
     
-    # CRITICAL FILTER: Only send patterns with 70%+ win rate
     if pattern_score < 70:
         logger.info(f"⏭️  {strategy} {action} SKIPPED - Pattern {pattern_score}% < 70%")
         return False
+
+    # ── Signal Gate: Vision AI + Advanced Patterns + Confluence Filter ────
+    if _GATE_AVAILABLE:
+        try:
+            _df_1m = _get_ohlcv(instrument, '1m') if callable(_get_ohlcv) else None
+            _df_5m = _get_ohlcv(instrument, '5m') if callable(_get_ohlcv) else None
+            _df_15m = _get_ohlcv(instrument, '15m') if callable(_get_ohlcv) else None
+            _gate_data = {
+                'action': action.upper().replace('BUY', 'LONG').replace('SELL', 'SHORT'),
+                'quality_score': quality_score, 'pattern': pattern,
+                'adx': technical_data.get('adx', 0) if technical_data else 0,
+                'atr': technical_data.get('atr', 0) if technical_data else 0,
+                'volume_ratio': technical_data.get('volume_ratio', 1.0) if technical_data else 1.0,
+                'mtf_alignment': technical_data.get('mtf_alignment', 0) if technical_data else 0,
+                'chop_index': technical_data.get('chop_index', 50) if technical_data else 50,
+            }
+            _gate = gate_signal(instrument, _gate_data['action'], _gate_data,
+                                _df_1m, _df_5m, _df_15m)
+            if not _gate['approved']:
+                logger.info(f"⛔ {strategy} {action} BLOCKED by Signal Gate "
+                            f"(confluence={_gate['confluence_score']}) — "
+                            f"{_gate['reasons'][-1] if _gate['reasons'] else 'low score'}")
+                return False
+            if _gate.get('stop_loss') and entry_price:
+                stop_loss = _gate['stop_loss']
+            if _gate.get('take_profit') and entry_price:
+                take_profit = _gate['take_profit']
+            if _gate.get('size_multiplier', 1.0) != 1.0:
+                position_size = max(1, round(position_size * _gate['size_multiplier']))
+            logger.info(f"✅ Gate: confluence={_gate['confluence_score']} "
+                        f"AI={_gate['ai_confidence']:.0%} "
+                        f"patterns={_gate.get('vision_patterns', [])}")
+        except Exception as _ge:
+            logger.debug(f"Signal gate error (non-fatal): {_ge}")
+
+    # ── Adaptive SL/TP/Size from learning agent ──────────────────────────
+    if _ADAPTIVE_AVAILABLE and entry_price and stop_loss and take_profit:
+        try:
+            _dir = action.upper().replace('BUY', 'LONG').replace('SELL', 'SHORT')
+            _sl_m = get_adaptive_param(instrument, _dir, 'sl_multiplier', 1.0)
+            _tp_m = get_adaptive_param(instrument, _dir, 'tp_multiplier', 1.0)
+            _sz_m = get_adaptive_param(instrument, _dir, 'size_multiplier', 1.0)
+            if _sl_m != 1.0 or _tp_m != 1.0:
+                _sl_d = abs(entry_price - stop_loss) * _sl_m
+                _tp_d = abs(take_profit - entry_price) * _tp_m
+                if action.lower() in ('buy', 'long'):
+                    stop_loss = round(entry_price - _sl_d, 2)
+                    take_profit = round(entry_price + _tp_d, 2)
+                else:
+                    stop_loss = round(entry_price + _sl_d, 2)
+                    take_profit = round(entry_price - _tp_d, 2)
+            if _sz_m != 1.0:
+                position_size = max(1, round(position_size * _sz_m))
+        except Exception as _adp_e:
+            logger.debug(f"Adaptive params (non-fatal): {_adp_e}")
     
     try:
         # Get current price and technical data if not provided
@@ -4505,7 +4570,10 @@ def scan_all_strategies(scan_count=0):
 def main():
     """Main scanner loop with FULL AI CO-PILOT + AI SIGNAL GENERATION (V4.5)"""
     
-    # Initialize pattern performance database
+    if _GATE_AVAILABLE:
+        init_gate()
+        logger.info("Signal Gate initialized (Vision AI + Advanced Patterns + Confluence Filter)")
+
     init_pattern_performance_db()
     logger.info("🗄️  Pattern performance database initialized")
     

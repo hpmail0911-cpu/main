@@ -37,6 +37,7 @@ from realtime_strategy_learner import RealtimeStrategyLearner
 from adaptive_params import write_learned_thresholds, compute_sl_tp_adjustments
 from rag_updater import update_all as update_rag_context
 from learning_monitor_fixed import LearningMonitor
+from evolution_engine import run_evolution
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +67,7 @@ THRESHOLDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 POLL_INTERVAL_SECONDS = 60
 FULL_RECOMPUTE_INTERVAL = 300
 REPORT_INTERVAL = 900
+EVOLUTION_INTERVAL = 14400  # 4 hours
 
 
 class LearningAgent:
@@ -88,6 +90,7 @@ class LearningAgent:
         self._cycle = 0
         self._last_recompute = datetime.min
         self._last_report = datetime.min
+        self._last_evolution = datetime.min
         self._total_outcomes = 0
 
     def run_once(self):
@@ -149,6 +152,10 @@ class LearningAgent:
                     self._generate_report()
                     self._last_report = now
 
+                if (now - self._last_evolution).total_seconds() > EVOLUTION_INTERVAL:
+                    self._run_evolution()
+                    self._last_evolution = now
+
                 if outcomes > 0:
                     logger.info(f"Cycle {self._cycle}: {outcomes} new outcome(s) "
                                 f"| Total tracked: {self._total_outcomes}")
@@ -208,6 +215,15 @@ class LearningAgent:
                 logger.info(f"  RAG context: {rag_count} entries updated")
         except Exception as e:
             logger.error(f"RAG update error: {e}")
+
+    def _run_evolution(self):
+        """Run the autonomous evolution engine."""
+        try:
+            state = run_evolution()
+            n = state.get('evolutions_run', 0)
+            logger.info(f"  Evolution #{n} complete")
+        except Exception as e:
+            logger.error(f"Evolution error: {e}")
 
     def _generate_report(self):
         """Generate and log a performance report."""
