@@ -97,6 +97,8 @@ def import_trades(csv_path: str):
         print(f"  ERROR: CSV not found: {csv_path}")
         return
 
+    learner = RealtimeStrategyLearner(LEARNING_DB)
+
     conn = sqlite3.connect(LEARNING_DB)
     c = conn.cursor()
     c.execute("SELECT trade_id FROM strategy_performance")
@@ -105,8 +107,6 @@ def import_trades(csv_path: str):
     print(f"  Existing trades in learning DB: {len(existing)}")
 
     validator_strategies = load_validator_strategies()
-
-    learner = RealtimeStrategyLearner(LEARNING_DB)
 
     imported = 0
     skipped = 0
