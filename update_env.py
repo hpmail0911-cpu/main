@@ -46,6 +46,7 @@ SEARCH_DIRS = [
     Path.home() / "topstepx-agent",
     Path.home() / "Desktop" / "topstepx-agent",
     Path.home() / "Downloads" / "topstepx-agent",
+    Path.cwd(),
 ]
 
 
