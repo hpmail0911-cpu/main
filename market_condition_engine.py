@@ -204,6 +204,20 @@ class MarketConditionEngine:
         self._last_check = datetime.now(timezone.utc)
         return evaluate_conditions(vix, adx, instrument, action, alert_data)
 
+    @staticmethod
+    def log_state(state: 'ConditionState', log=None):
+        """Log the current market condition state."""
+        if log is None:
+            import logging
+            log = logging.getLogger('market_condition_engine')
+        condition = state.condition if hasattr(state, 'condition') else 'UNKNOWN'
+        blocked = state.blocked if hasattr(state, 'blocked') else False
+        reason = state.reason if hasattr(state, 'reason') else ''
+        if blocked:
+            log.info(f"  Market: {condition} — BLOCKED: {reason}")
+        else:
+            log.info(f"  Market: {condition} — OK")
+
     @property
     def last_vix(self) -> float:
         return self._last_vix
