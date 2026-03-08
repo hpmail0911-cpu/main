@@ -132,7 +132,11 @@ class TradeOutcomeTracker:
             return None
 
     def fetch_closed_trades_projectx(self, since_hours: int = 24) -> List[Dict]:
-        """Fetch closed trades from ProjectX/TopStepX API."""
+        """Fetch closed trades from ProjectX/TopStepX API.
+
+        Only returns fills with a real (non-zero) profitAndLoss value.
+        Fills with pnl=0 or pnl=None are open or empty — skip them.
+        """
         client = self._get_projectx_client()
         if not client or not self.account_id:
             return []
@@ -140,6 +144,7 @@ class TradeOutcomeTracker:
             all_fills = client.get_positions(int(self.account_id))
             closed = [f for f in all_fills
                       if f.get('profitAndLoss') is not None
+                      and float(f.get('profitAndLoss', 0)) != 0.0
                       and str(f.get('id', '')) not in self._tracked_trades]
             return closed
         except Exception as e:
@@ -199,6 +204,9 @@ class TradeOutcomeTracker:
                     _, contract_id, direction, entry_price, orig_stop, cur_stop, first_seen = managed
                     inst = _get_instrument(contract_id)
                     entry_time = first_seen or ts
+
+                if inst == 'UNKNOWN' or not entry_price:
+                    continue
 
                 closed.append({
                     'trade_id': trade_key,
@@ -318,6 +326,10 @@ class TradeOutcomeTracker:
             return
 
         instrument = trade.get('instrument', _get_instrument(trade.get('symbol', '')))
+        if instrument == 'UNKNOWN' or not instrument:
+            self._tracked_trades.add(trade_id)
+            return
+
         pnl = float(trade.get('pnl', 0))
         outcome = trade.get('outcome', 'WIN' if pnl > 0 else 'LOSS')
         strategy = trade.get('strategy', 'UNKNOWN')
@@ -390,9 +402,14 @@ class TradeOutcomeTracker:
             if not trade_id or trade_id in self._tracked_trades:
                 continue
 
-            contract = raw.get('contractName', raw.get('contract', ''))
+            contract = raw.get('contractId', raw.get('contractName', raw.get('contract', '')))
             instrument = _get_instrument(contract)
-            pnl = float(raw.get('pnl', raw.get('realizedPnl', 0)))
+            if instrument == 'UNKNOWN':
+                self._tracked_trades.add(trade_id)
+                continue
+
+            raw_pnl = raw.get('profitAndLoss', raw.get('pnl', raw.get('realizedPnl', 0)))
+            pnl = float(raw_pnl) if raw_pnl is not None else 0.0
             direction = raw.get('type', raw.get('side', 'Long'))
 
             entry_time = raw.get('enteredAt', raw.get('openTime', ''))
