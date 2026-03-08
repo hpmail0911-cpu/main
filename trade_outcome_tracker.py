@@ -2,9 +2,11 @@
 """
 Trade Outcome Tracker — polls for closed positions and records real P&L.
 
-Two data sources (tried in order):
-  1. ProjectX API  — live trade history from broker
-  2. Validator DB   — open_positions table with SL/TP prices + live price checks
+Three data sources (tried in order):
+  1. Trade Manager DB — trade_manager_auto.db tracks every managed position
+     with entry price, direction, stops, and close events (MAE, BE, trailing)
+  2. ProjectX API     — live trade history from TopStepX broker via real API
+  3. Validator DB     — open_positions table with SL/TP prices + live price checks
 
 Writes outcomes to:
   - validator's trading_performance.db (updates todays_trades.result & pnl)
@@ -34,14 +36,20 @@ try:
 except ImportError:
     RAG_AVAILABLE = False
 
+try:
+    from projectx_api_client import ProjectXClient
+    PROJECTX_CLIENT_AVAILABLE = True
+except ImportError:
+    PROJECTX_CLIENT_AVAILABLE = False
+
 logger = logging.getLogger('trade_outcome_tracker')
 
 VALIDATOR_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'trading_performance.db')
 LEARNING_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'strategy_learning.db')
-
-PROJECTX_API_BASE = "https://api.projectx.com"
+TRADE_MANAGER_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'trade_manager_auto.db')
 
 TICK_VALUES = {
     'MES': 1.25, 'MNQ': 0.50, 'MGC': 0.10, 'MCL': 0.01,
@@ -84,9 +92,9 @@ class TradeOutcomeTracker:
         self.projectx_api_key = projectx_api_key or os.getenv('PROJECTX_API_KEY', '')
         self.account_id = account_id or os.getenv('PROJECTX_ACCOUNT_ID', '')
         self.learner = RealtimeStrategyLearner(LEARNING_DB)
-        self._projectx_token = None
-        self._token_expires = datetime.min
+        self._projectx_client = None
         self._tracked_trades = set()
+        self._last_tm_mod_count = 0
         self._load_tracked_trades()
 
         if RAG_AVAILABLE:
@@ -104,59 +112,122 @@ class TradeOutcomeTracker:
             pass
         logger.info(f"Loaded {len(self._tracked_trades)} previously tracked trades")
 
-    # ── ProjectX API ─────────────────────────────────────────────────────────
+    # ── ProjectX API (real client) ───────────────────────────────────────────
 
-    def _authenticate_projectx(self) -> bool:
+    def _get_projectx_client(self) -> Optional['ProjectXClient']:
+        if self._projectx_client:
+            return self._projectx_client
+        if not PROJECTX_CLIENT_AVAILABLE:
+            return None
         if not self.projectx_username or not self.projectx_api_key:
-            return False
-        if self._projectx_token and datetime.now() < self._token_expires:
-            return True
+            return None
         try:
-            resp = requests.post(
-                f"{PROJECTX_API_BASE}/api/v1/auth/login",
-                json={
-                    'username': self.projectx_username,
-                    'apiKey': self.projectx_api_key,
-                },
-                timeout=10,
+            self._projectx_client = ProjectXClient(
+                self.projectx_username, self.projectx_api_key, 'prod'
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                self._projectx_token = data.get('token', '')
-                self._token_expires = datetime.now() + timedelta(hours=1)
-                logger.info("ProjectX API authenticated")
-                return True
+            logger.info("ProjectX client initialized for outcome tracking")
+            return self._projectx_client
         except Exception as e:
-            logger.debug(f"ProjectX auth failed: {e}")
-        return False
-
-    def _get_projectx_headers(self) -> dict:
-        return {'Authorization': f'Bearer {self._projectx_token}',
-                'Content-Type': 'application/json'}
+            logger.debug(f"ProjectX client init failed: {e}")
+            return None
 
     def fetch_closed_trades_projectx(self, since_hours: int = 24) -> List[Dict]:
-        """Fetch closed trades from ProjectX API."""
-        if not self._authenticate_projectx():
-            return []
-        if not self.account_id:
+        """Fetch closed trades from ProjectX/TopStepX API."""
+        client = self._get_projectx_client()
+        if not client or not self.account_id:
             return []
         try:
-            since = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()
-            resp = requests.get(
-                f"{PROJECTX_API_BASE}/api/v1/accounts/{self.account_id}/trades",
-                params={'since': since, 'status': 'closed'},
-                headers=self._get_projectx_headers(),
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                logger.debug(f"ProjectX trades fetch failed: {resp.status_code}")
-                return []
-            data = resp.json()
-            trades = data if isinstance(data, list) else data.get('trades', [])
-            return trades
+            all_fills = client.get_positions(int(self.account_id))
+            closed = [f for f in all_fills
+                      if f.get('profitAndLoss') is not None
+                      and str(f.get('id', '')) not in self._tracked_trades]
+            return closed
         except Exception as e:
-            logger.debug(f"ProjectX trades error: {e}")
+            logger.debug(f"ProjectX trades fetch error: {e}")
             return []
+
+    # ── Trade Manager DB (primary outcome source) ────────────────────────────
+
+    def fetch_outcomes_from_trade_manager(self) -> List[Dict]:
+        """Read closed trade events from Trade Manager's modifications log.
+
+        The Trade Manager logs every POSITION_CLOSED event with the action
+        reason (MAE, trailing stop, manual). We match these back to the
+        managed_trades table for entry price and direction.
+        """
+        if not os.path.exists(TRADE_MANAGER_DB):
+            return []
+
+        closed = []
+        try:
+            conn = sqlite3.connect(TRADE_MANAGER_DB)
+            c = conn.cursor()
+            c.execute("""SELECT m.id, m.timestamp, m.trade_id, m.action,
+                                m.old_stop, m.new_stop, m.success
+                         FROM modifications m
+                         WHERE m.action = 'POSITION_CLOSED'
+                           AND m.success = 1
+                         ORDER BY m.id DESC
+                         LIMIT 100""")
+            close_events = c.fetchall()
+
+            for event in close_events:
+                mod_id, ts, trade_id, action, old_stop, new_stop, success = event
+                trade_key = f"tm_{trade_id}"
+                if trade_key in self._tracked_trades:
+                    continue
+
+                c.execute("""SELECT trade_id, contract_id, direction,
+                                    entry_price, original_stop, current_stop,
+                                    first_seen
+                             FROM managed_trades WHERE trade_id = ?""",
+                          (trade_id,))
+                managed = c.fetchone()
+
+                if not managed:
+                    c.execute("""SELECT DISTINCT trade_id FROM modifications
+                                 WHERE trade_id = ?""", (trade_id,))
+                    if not c.fetchone():
+                        continue
+
+                inst = 'UNKNOWN'
+                entry_price = 0.0
+                direction = 'LONG'
+                entry_time = ts or ''
+
+                if managed:
+                    _, contract_id, direction, entry_price, orig_stop, cur_stop, first_seen = managed
+                    inst = _get_instrument(contract_id)
+                    entry_time = first_seen or ts
+
+                closed.append({
+                    'trade_id': trade_key,
+                    'instrument': inst,
+                    'direction': direction or 'LONG',
+                    'entry_price': float(entry_price or 0),
+                    'exit_price': 0.0,
+                    'pnl': 0.0,
+                    'entry_time': entry_time,
+                    'exit_time': ts,
+                    'strategy': 'UNKNOWN',
+                    'quality_score': 0,
+                    'outcome': 'CLOSED',
+                })
+
+            new_mod_count = len(close_events)
+
+            c.execute("""SELECT m.trade_id, m.action, m.old_stop, m.new_stop,
+                                m.timestamp
+                         FROM modifications m
+                         WHERE m.action IN ('STOP_MOVED')
+                           AND m.success = 1
+                         ORDER BY m.id DESC LIMIT 50""")
+
+            conn.close()
+        except Exception as e:
+            logger.error(f"Trade Manager DB read error: {e}")
+
+        return closed
 
     # ── Validator DB position checking ────────────────────────────────────────
 
@@ -357,6 +428,13 @@ class TradeOutcomeTracker:
     def poll_once(self) -> int:
         """Run one polling cycle. Returns number of new closed trades found."""
         total = 0
+
+        tm_closed = self.fetch_outcomes_from_trade_manager()
+        for trade in tm_closed:
+            self.process_closed_trade(trade)
+            total += 1
+        if tm_closed:
+            logger.info(f"  Trade Manager: {len(tm_closed)} closed trade(s)")
 
         projectx_trades = self.fetch_closed_trades_projectx()
         if projectx_trades:

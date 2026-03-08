@@ -121,6 +121,8 @@ class LearningAgent:
 
         logger.info("=" * 70)
         logger.info("  AI LEARNING AGENT — STARTED")
+        logger.info("  Scanners: GROQ_V5 (:8765) | ULTIMATE_60 (:5002) | Scalping (:5002)")
+        logger.info("  Trade Manager: trade_manager_AUTOMATED.py (primary outcome source)")
         logger.info("  Poll interval: %ds | Recompute: %ds | Report: %ds",
                      POLL_INTERVAL_SECONDS, FULL_RECOMPUTE_INTERVAL, REPORT_INTERVAL)
         logger.info("  ProjectX: %s | Account: %s",
