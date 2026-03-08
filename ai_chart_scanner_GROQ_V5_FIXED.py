@@ -4037,15 +4037,17 @@ def send_signal(strategy, instrument, action, quality_score=0, pattern='basic_cr
                 stop_loss = _gate['stop_loss']
             if _gate.get('take_profit') and entry_price:
                 take_profit = _gate['take_profit']
-            if _gate.get('size_multiplier', 1.0) != 1.0:
+            if _gate.get('position_size_override'):
+                position_size = _gate['position_size_override']
+            elif _gate.get('size_multiplier', 1.0) != 1.0:
                 position_size = max(1, round(position_size * _gate['size_multiplier']))
             logger.info(f"✅ Gate: confluence={_gate['confluence_score']} "
-                        f"AI={_gate['ai_confidence']:.0%} "
+                        f"AI={_gate['ai_confidence']:.0%} size={position_size} "
                         f"patterns={_gate.get('vision_patterns', [])}")
         except Exception as _ge:
             logger.debug(f"Signal gate error (non-fatal): {_ge}")
 
-    # ── Adaptive SL/TP/Size from learning agent ──────────────────────────
+    # ── Adaptive SL/TP from learning agent (size locked during testing) ──
     if _ADAPTIVE_AVAILABLE and entry_price and stop_loss and take_profit:
         try:
             _dir = action.upper().replace('BUY', 'LONG').replace('SELL', 'SHORT')

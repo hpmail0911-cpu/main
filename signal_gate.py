@@ -40,6 +40,11 @@ _initialized = False
 _VISION_COOLDOWN = {}
 VISION_COOLDOWN_SECONDS = 30
 
+# Position size lock: 1 micro contract per trade during testing period.
+# After TESTING_END_DATE, the learning agent's adaptive sizing takes over.
+TESTING_SIZE_LOCK = 1
+TESTING_END_DATE = '2026-03-15'
+
 
 def init_gate():
     """Initialize Vision AI and Signal Filter. Call once at scanner startup."""
@@ -161,7 +166,13 @@ def gate_signal(instrument: str, action: str, signal_data: Dict,
     result['confluence_score'] = decision.confluence_score
     result['ai_confidence'] = decision.ai_confidence
     result['reasons'] = decision.reasons
-    result['size_multiplier'] = decision.adjustments.get('size_multiplier', 1.0)
+
+    from datetime import datetime as _dt
+    if _dt.now().strftime('%Y-%m-%d') <= TESTING_END_DATE:
+        result['size_multiplier'] = 0  # sentinel: force to TESTING_SIZE_LOCK
+        result['position_size_override'] = TESTING_SIZE_LOCK
+    else:
+        result['size_multiplier'] = decision.adjustments.get('size_multiplier', 1.0)
 
     if decision.adjustments.get('vision_stop'):
         result['stop_loss'] = decision.adjustments['vision_stop']
@@ -169,8 +180,9 @@ def gate_signal(instrument: str, action: str, signal_data: Dict,
         result['take_profit'] = decision.adjustments['vision_target']
 
     status = "APPROVED" if decision.approved else "BLOCKED"
+    size_note = f" | SIZE LOCKED: {TESTING_SIZE_LOCK}" if result.get('position_size_override') else ""
     logger.info(f"  Gate: {status} | Confluence: {decision.confluence_score}/100 | "
-                f"AI: {decision.ai_confidence:.0%} | "
+                f"AI: {decision.ai_confidence:.0%}{size_note} | "
                 f"{'; '.join(decision.reasons[-3:])}")
 
     return result

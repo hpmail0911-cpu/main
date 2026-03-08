@@ -1699,10 +1699,13 @@ def send_signal(strategy, instrument, action, quality_score=0, mtf_htf1=None, mt
                 logger.info(f"⛔ {strategy} {action} BLOCKED by Signal Gate "
                             f"(confluence={_gate['confluence_score']})")
                 return False
-            if _gate.get('size_multiplier', 1.0) != 1.0:
+            if _gate.get('position_size_override'):
+                kwargs['position_size'] = _gate['position_size_override']
+            elif _gate.get('size_multiplier', 1.0) != 1.0:
                 kwargs['position_size'] = max(1, round(kwargs.get('position_size', 1) * _gate['size_multiplier']))
             logger.info(f"✅ Gate: confluence={_gate['confluence_score']} "
-                        f"AI={_gate['ai_confidence']:.0%}")
+                        f"AI={_gate['ai_confidence']:.0%} "
+                        f"size={kwargs.get('position_size', 1)}")
         except Exception as _ge:
             logger.debug(f"Signal gate error (non-fatal): {_ge}")
 

@@ -43,6 +43,8 @@ DEGRADE_WR_THRESHOLD = 0.45
 PREFER_WR_THRESHOLD = 0.70
 ELITE_WR_THRESHOLD = 0.80
 
+TESTING_END_DATE = '2026-03-15'
+
 
 def load_current_state() -> Dict:
     if os.path.exists(EVOLUTION_STATE_PATH):
@@ -311,6 +313,14 @@ def run_evolution() -> Dict:
 
     if regressed:
         logger.warning("  Reverting aggressive changes due to regression")
+
+    in_testing = datetime.now().strftime('%Y-%m-%d') <= TESTING_END_DATE
+    if in_testing:
+        state['position_size_mode'] = 'LOCKED_1'
+        logger.info(f"  Position size: LOCKED to 1 contract (testing until {TESTING_END_DATE})")
+    else:
+        state['position_size_mode'] = 'ADAPTIVE'
+        logger.info("  Position size: ADAPTIVE (learning agent controls sizing)")
 
     state['evolutions_run'] = state.get('evolutions_run', 0) + 1
     save_state(state)
