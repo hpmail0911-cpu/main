@@ -1185,4 +1185,5 @@ if __name__ == '__main__':
     else:
         logger.info("✅ STARTUP: No stale positions found")
 
-    app.run(host='0.0.0.0', port=8765, debug=False)
+    _port = int(os.getenv('VALIDATOR_PORT', os.getenv('FLASK_RUN_PORT', '8765')))
+    app.run(host='0.0.0.0', port=_port, debug=False)
