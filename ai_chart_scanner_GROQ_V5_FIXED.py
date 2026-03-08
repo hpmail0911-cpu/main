@@ -1393,6 +1393,11 @@ ALL_STRATEGIES = {
     'TL5':    {'instrument': 'MNQ', 'timeframe': '5m', 'category': 'HIGH', 'priority': 1},
     'TL33.1': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'HIGH', 'priority': 1},
     
+    # PROMOTED FROM PAPER — 2026-03-08 (real paper performance)
+    'TL5-LIVE':  {'instrument': 'MNQ', 'timeframe': '5m', 'category': 'HIGH', 'priority': 1},
+    'TL33-LIVE': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'HIGH', 'priority': 1},
+    'TL38-LIVE': {'instrument': 'MNQ', 'timeframe': '10m', 'category': 'HIGH', 'priority': 1},
+    
     # 4-HOUR SWING TRADES (3)
     'MNQ-4H': {'instrument': 'MNQ', 'timeframe': '4h', 'category': 'HIGH', 'priority': 2},
     'MES-4H': {'instrument': 'MES', 'timeframe': '4h', 'category': 'HIGH', 'priority': 2},
@@ -1436,7 +1441,7 @@ ALL_STRATEGIES = {
     
     'MCL-5M': {'instrument': 'MCL', 'timeframe': '5m', 'category': 'MEDIUM', 'priority': 5},  # ⬇️ downgraded
     'TL31': {'instrument': 'MGC', 'timeframe': '30m', 'category': 'MEDIUM', 'priority': 5},
-    'PT-TL38': {'instrument': 'MNQ', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5},
+    'PT-TL38': {'instrument': 'MNQ', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5, 'enabled': False},  # PROMOTED → TL38-LIVE
     'MYM-1D': {'instrument': 'MYM', 'timeframe': '1d', 'category': 'MEDIUM', 'priority': 5},
     'MGC-10M': {'instrument': 'MGC', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5},
     'MCL-10M': {'instrument': 'MCL', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5},

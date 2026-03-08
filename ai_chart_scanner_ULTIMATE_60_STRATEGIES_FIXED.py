@@ -271,6 +271,14 @@ ALL_STRATEGIES = {
     'TL5':    {'instrument': 'MNQ', 'timeframe': '5m', 'category': 'HIGH', 'priority': 1},
     'TL33.1': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'HIGH', 'priority': 1},
     
+    # PROMOTED FROM PAPER — 2026-03-08 (real paper performance)
+    # PT-TL5:  90.5% WR, $9,351 on 21 trades — MNQ 5m
+    # PT-TL33: 76.9% WR, $9,039 on 13 trades — MNQ 3m
+    # PT-TL38: 85.7% WR, $224 on 7 trades   — MNQ 10m/15m
+    'TL5-LIVE':  {'instrument': 'MNQ', 'timeframe': '5m', 'category': 'HIGH', 'priority': 1},
+    'TL33-LIVE': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'HIGH', 'priority': 1},
+    'TL38-LIVE': {'instrument': 'MNQ', 'timeframe': '10m', 'category': 'HIGH', 'priority': 1},
+    
     # 4-HOUR SWING TRADES (3)
     'MNQ-4H': {'instrument': 'MNQ', 'timeframe': '4h', 'category': 'HIGH', 'priority': 2},
     'MES-4H': {'instrument': 'MES', 'timeframe': '4h', 'category': 'HIGH', 'priority': 2},
@@ -313,7 +321,7 @@ ALL_STRATEGIES = {
     # ========================================================================
     
     'TL31': {'instrument': 'MGC', 'timeframe': '30m', 'category': 'MEDIUM', 'priority': 5},
-    'PT-TL38': {'instrument': 'MNQ', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5},
+    'PT-TL38': {'instrument': 'MNQ', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5, 'enabled': False},  # PROMOTED → TL38-LIVE (HIGH)
     'MYM-1D': {'instrument': 'MYM', 'timeframe': '1d', 'category': 'MEDIUM', 'priority': 5},
     'MGC-10M': {'instrument': 'MGC', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5},
     'MCL-10M': {'instrument': 'MCL', 'timeframe': '10m', 'category': 'MEDIUM', 'priority': 5},
@@ -331,8 +339,8 @@ ALL_STRATEGIES = {
     # LOW strategies - ENABLED with strict 3/3 MTF + NY prime-hours-only session filter
     
     'TL33': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'LOW', 'priority': 6, 'enabled': True},
-    'PT-TL33': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'LOW', 'priority': 6, 'enabled': True},
-    'PT-TL5': {'instrument': 'MNQ', 'timeframe': '5m', 'category': 'LOW', 'priority': 6, 'enabled': True},
+    'PT-TL33': {'instrument': 'MNQ', 'timeframe': '3m', 'category': 'LOW', 'priority': 6, 'enabled': False},  # PROMOTED → TL33-LIVE (HIGH)
+    'PT-TL5': {'instrument': 'MNQ', 'timeframe': '5m', 'category': 'LOW', 'priority': 6, 'enabled': False},  # PROMOTED → TL5-LIVE (HIGH)
     'MNQ-1M': {'instrument': 'MNQ', 'timeframe': '1m', 'category': 'LOW', 'priority': 6, 'enabled': True},
     'MCL-3M': {'instrument': 'MCL', 'timeframe': '3m', 'category': 'LOW', 'priority': 6, 'enabled': True},
     
@@ -344,8 +352,8 @@ ALL_STRATEGIES = {
     'TL37': {'instrument': 'MES', 'timeframe': '5m', 'category': 'TESTING', 'priority': 7, 'enabled': False},
     'TL41': {'instrument': 'MES', 'timeframe': '15m', 'category': 'TESTING', 'priority': 7, 'enabled': False},  # FIX: disabled — noise stop-outs
     'TL42': {'instrument': 'MES', 'timeframe': '45m', 'category': 'TESTING', 'priority': 7, 'enabled': False},  # FIX: disabled — noise stop-outs
-    'PT-TL3': {'instrument': 'MES', 'timeframe': '3h', 'category': 'TESTING', 'priority': 7, 'enabled': True},
-    'PT-TL4': {'instrument': 'MES', 'timeframe': '4h', 'category': 'TESTING', 'priority': 7, 'enabled': True},
+    'PT-TL3': {'instrument': 'MES', 'timeframe': '3h', 'category': 'TESTING', 'priority': 7, 'enabled': False},  # 0% WR — disabled
+    'PT-TL4': {'instrument': 'MES', 'timeframe': '4h', 'category': 'TESTING', 'priority': 7, 'enabled': False},  # 0% WR — disabled
     'TL02': {'instrument': 'MNQ', 'timeframe': '2h', 'category': 'TESTING', 'priority': 7, 'enabled': False},
     'PT-TL37': {'instrument': 'MES', 'timeframe': '5m', 'category': 'TESTING', 'priority': 7, 'enabled': True},
     'PT-TL30': {'instrument': 'MES', 'timeframe': '30m', 'category': 'TESTING', 'priority': 7, 'enabled': True},
