@@ -82,6 +82,13 @@ except Exception as _te:
     def is_strategy_disabled(s): return False
     def is_strategy_preferred(s): return False
 
+try:
+    from adaptive_params import get_adaptive_param
+    _ADAPTIVE_AVAILABLE = True
+except ImportError:
+    _ADAPTIVE_AVAILABLE = False
+    def get_adaptive_param(inst, direction, param, default=1.0): return default
+
 import warnings
 
 
@@ -1371,6 +1378,27 @@ def send_signal(strategy, instrument, action, quality_score=0, pattern='basic_cr
         except Exception as _mce_e:
             logger.debug(f"MCE send_signal error (non-fatal): {_mce_e}")
 
+        if _ADAPTIVE_AVAILABLE:
+            try:
+                _dir = action.upper().replace('BUY', 'LONG').replace('SELL', 'SHORT')
+                _sl_m = get_adaptive_param(instrument, _dir, 'sl_multiplier', 1.0)
+                _tp_m = get_adaptive_param(instrument, _dir, 'tp_multiplier', 1.0)
+                _sz_m = get_adaptive_param(instrument, _dir, 'size_multiplier', 1.0)
+                if _sl_m != 1.0 or _tp_m != 1.0:
+                    _atr_a = float(technical_data.get('atr', 20.0)) if technical_data else 20.0
+                    _sl_d = abs(entry_price - stop_loss) * _sl_m
+                    _tp_d = abs(take_profit - entry_price) * _tp_m
+                    if action.lower() in ('buy', 'long'):
+                        stop_loss = round(entry_price - _sl_d, 2)
+                        take_profit = round(entry_price + _tp_d, 2)
+                    else:
+                        stop_loss = round(entry_price + _sl_d, 2)
+                        take_profit = round(entry_price - _tp_d, 2)
+                if _sz_m != 1.0:
+                    position_size = max(1, round(position_size * _sz_m))
+            except Exception as _adp_e:
+                logger.debug(f"Adaptive params (non-fatal): {_adp_e}")
+
         def _to_native(v):
             import numpy as np
             if isinstance(v, np.bool_):    return bool(v)
@@ -1592,6 +1620,11 @@ def run_scanner_loop():
             if cycle % 10 == 0:
                 log_pattern_performance_summary()
                 log_ai_signal_performance()
+                if _TUNER_AVAILABLE:
+                    try:
+                        load_learned_thresholds()
+                    except Exception:
+                        pass
 
             time.sleep(SCAN_INTERVAL_SECONDS_MAIN)
 

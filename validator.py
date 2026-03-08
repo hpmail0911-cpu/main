@@ -1077,6 +1077,60 @@ def reset_positions():
                     'message': 'All tracked positions cleared. Validator unblocked.'}), 200
 
 
+@app.route('/trade_outcome', methods=['POST'])
+def trade_outcome():
+    """Receive trade outcome notifications from the learning agent or broker.
+       Payload: {symbol, action, result: 'win'|'loss', pnl, strategy}
+    """
+    data = request.get_json(force=True) or {}
+    symbol = data.get('symbol', '')
+    result = data.get('result', 'loss')
+    pnl = float(data.get('pnl', 0))
+    strategy = data.get('strategy', 'UNKNOWN')
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO daily_performance (date) VALUES (?)", (today,))
+    if result == 'win':
+        c.execute("UPDATE daily_performance SET wins = wins + 1, total_pnl = total_pnl + ? WHERE date = ?",
+                  (pnl, today))
+    else:
+        c.execute("UPDATE daily_performance SET losses = losses + 1, total_pnl = total_pnl + ? WHERE date = ?",
+                  (pnl, today))
+    if data.get('position_id'):
+        c.execute("DELETE FROM open_positions WHERE id = ?", (data['position_id'],))
+    elif symbol:
+        c.execute("DELETE FROM open_positions WHERE symbol = ?", (symbol.upper(),))
+    conn.commit()
+    conn.close()
+
+    logger.info(f"📊 Outcome: {strategy} {symbol} {result.upper()} PnL=${pnl:+.2f}")
+    return jsonify({'status': 'recorded', 'result': result, 'pnl': pnl}), 200
+
+
+@app.route('/learning_status', methods=['GET'])
+def learning_status():
+    """Return current learning state for the learning agent dashboard."""
+    stats = get_daily_stats()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM open_positions")
+    open_count = c.fetchone()[0]
+    c.execute("""SELECT strategy, COUNT(*) as cnt,
+                        SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) as w
+                 FROM todays_trades
+                 WHERE timestamp >= datetime('now', '-24 hours')
+                 GROUP BY strategy ORDER BY cnt DESC LIMIT 10""")
+    strategy_stats = [{'strategy': r[0], 'trades': r[1], 'wins': r[2]} for r in c.fetchall()]
+    conn.close()
+    return jsonify({
+        'daily_stats': stats,
+        'open_positions': open_count,
+        'strategy_performance': strategy_stats,
+    }), 200
+
+
 if __name__ == '__main__':
     logger.info("="*80)
     logger.info("ULTIMATE ENTRY VALIDATOR — SESSION-AWARE")
