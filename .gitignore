@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 learned_thresholds.json
 .env
+env_values.json

@@ -1,0 +1,14 @@
+{
+  "GROQ_API_KEY": "",
+  "OPENAI_API_KEY": "",
+  "TRADERSPOST_WEBHOOK": "",
+  "PROJECTX_USERNAME": "",
+  "PROJECTX_PASSWORD": "",
+  "PROJECTX_API_KEY": "",
+  "PROJECTX_ACCOUNT_ID": "",
+  "TOPSTEPX_USERNAME": "",
+  "TOPSTEPX_PASSWORD": "",
+  "OLLAMA_HOST": "http://localhost:11434",
+  "OLLAMA_MODEL": "llama3.1:latest",
+  "DATABASE_PATH": "./topstepx_trades.db"
+}
