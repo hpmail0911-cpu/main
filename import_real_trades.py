@@ -112,7 +112,7 @@ def import_trades(csv_path: str):
     skipped = 0
     errors = 0
 
-    with open(csv_path, 'r') as f:
+    with open(csv_path, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         for row in reader:
             trade_id = str(row.get('Id', ''))
