@@ -1,0 +1,10 @@
+{
+  "instruments": {
+    "MES": {"max_stop_pts": 4.00,  "dollar_per_pt": 5.00,   "tick_size": 0.25, "target_rr": 2.0},
+    "MNQ": {"max_stop_pts": 9.00,  "dollar_per_pt": 2.00,   "tick_size": 0.25, "target_rr": 2.0},
+    "MGC": {"max_stop_pts": 1.80,  "dollar_per_pt": 10.00,  "tick_size": 0.10, "target_rr": 2.0},
+    "MCL": {"max_stop_pts": 0.15,  "dollar_per_pt": 100.00, "tick_size": 0.01, "target_rr": 2.0},
+    "MYM": {"max_stop_pts": 40.00, "dollar_per_pt": 0.50,   "tick_size": 1.00, "target_rr": 2.0},
+    "M2K": {"max_stop_pts": 4.00,  "dollar_per_pt": 5.00,   "tick_size": 0.10, "target_rr": 2.0}
+  }
+}
