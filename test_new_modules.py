@@ -61,8 +61,8 @@ class TestMarketConditionEngine(unittest.TestCase):
         from market_condition_engine import ConditionState
         state = ConditionState()
         self.assertFalse(state.blocked)
-        self.assertEqual(state.sl_multiplier, 2.5)
-        self.assertEqual(state.tp_multiplier, 1.5)
+        self.assertEqual(state.sl_multiplier, 1.5)
+        self.assertEqual(state.tp_multiplier, 3.0)
         self.assertEqual(state.position_size_mult, 1.0)
 
     def test_get_news_status_returns_tuple(self):

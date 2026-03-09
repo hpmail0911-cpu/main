@@ -382,8 +382,10 @@ class TestEndToEnd(unittest.TestCase):
         if result:
             self.assertIn(result.pattern, ('BREAKOUT', 'IMPULSE'))
 
-    def test_detect_returns_none_for_none_df(self):
-        result = detect_signal('MES', '5m', None)
+    def test_detect_returns_none_for_short_df(self):
+        import pandas as pd
+        df = pd.DataFrame({'Open': [1], 'High': [2], 'Low': [0.5], 'Close': [1.5], 'Volume': [100]})
+        result = detect_signal('MES', '5m', df)
         self.assertIsNone(result)
 
 

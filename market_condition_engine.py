@@ -25,8 +25,8 @@ class ConditionState:
     blocked: bool = False
     reason: str = ''
     quality_bonus: int = 0
-    sl_multiplier: float = 2.5
-    tp_multiplier: float = 1.5
+    sl_multiplier: float = 1.5
+    tp_multiplier: float = 3.0
     position_size_mult: float = 1.0
 
 
@@ -149,28 +149,28 @@ def evaluate_conditions(vix: float, adx: float, instrument: str,
         state.condition = 'VIX_EXTREME'
         state.quality_bonus = -15
         state.sl_multiplier = 1.5
-        state.tp_multiplier = 1.0
+        state.tp_multiplier = 3.5
         state.position_size_mult = 0.5
 
     elif vix_regime == 'HIGH_VOL':
         state.condition = 'HIGH_VOLATILITY'
         state.quality_bonus = -10
-        state.sl_multiplier = 2.0
-        state.tp_multiplier = 1.2
+        state.sl_multiplier = 1.5
+        state.tp_multiplier = 3.5
         state.position_size_mult = 0.7
 
     elif vix_regime == 'ELEVATED':
         state.condition = 'ELEVATED_VOL'
         state.quality_bonus = -5
-        state.sl_multiplier = 2.5
-        state.tp_multiplier = 1.5
+        state.sl_multiplier = 1.5
+        state.tp_multiplier = 3.0
         state.position_size_mult = 0.85
 
     elif vix_regime == 'LOW_VOL':
         state.condition = 'LOW_VOLATILITY'
         state.quality_bonus = 5
-        state.sl_multiplier = 2.5
-        state.tp_multiplier = 1.5
+        state.sl_multiplier = 1.5
+        state.tp_multiplier = 3.5
         state.position_size_mult = 1.0
 
     else:
