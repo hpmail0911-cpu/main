@@ -61,17 +61,24 @@ TRAILING_DISTANCE_PTS = 2
 DAILY_MAX_LOSS        = -800
 DAILY_MAX_PROFIT_LOCK = None
 
-# FIX-1: REMOVED AUTO_SHUTDOWN_TIME - Trading 24/7 during futures market hours
+PROGRESSIVE_TP_ENABLED = True
+PROGRESSIVE_TP_RATIO   = 1.5     # close 50% at 1.5x stop distance
+PROGRESSIVE_TP_PCT     = 0.50    # close this fraction of position
 
-# FIX-2: Updated BE triggers to $0.75 profit
+TELEGRAM_ENABLED       = True
+TELEGRAM_WARNING_PNL   = -200
+TELEGRAM_PAUSE_PNL     = -400
+TELEGRAM_BOT_TOKEN     = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID       = os.environ.get('TELEGRAM_CHAT_ID', '')
+
 INSTRUMENT_PARAMS = {
-    'MNQ':  {'be_trigger': 0.375,  'be_move': 0.25, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25},
-    'MES':  {'be_trigger': 0.15,   'be_move': 0.25, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25},
-    'MGC':  {'be_trigger': 0.075,  'be_move': 0.10, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10},
-    'MCL':  {'be_trigger': 0.0075, 'be_move': 0.01, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01},
-    'MCLE': {'be_trigger': 0.0075, 'be_move': 0.01, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01},
-    'MYM':  {'be_trigger': 1.5,    'be_move': 1.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0},
-    'M2K':  {'be_trigger': 0.15,   'be_move': 0.10, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10},
+    'MNQ':  {'be_trigger': 0.375,  'be_move': 0.25, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 2.0},
+    'MES':  {'be_trigger': 0.15,   'be_move': 0.25, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.0},
+    'MGC':  {'be_trigger': 0.075,  'be_move': 0.10, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.8},
+    'MCL':  {'be_trigger': 0.0075, 'be_move': 0.01, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05},
+    'MCLE': {'be_trigger': 0.0075, 'be_move': 0.01, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05},
+    'MYM':  {'be_trigger': 1.5,    'be_move': 1.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 15.0},
+    'M2K':  {'be_trigger': 0.15,   'be_move': 0.10, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.0},
 }
 
 CHECK_INTERVAL_SECONDS = 10
@@ -186,13 +193,16 @@ def init_database():
                   current_stop REAL,
                   stop_order_id INTEGER,
                   be_moved INTEGER DEFAULT 0,
+                  partial_closed INTEGER DEFAULT 0,
+                  original_size INTEGER DEFAULT 1,
                   first_seen TEXT,
                   last_modified TEXT)''')
-    try:
-        c.execute("ALTER TABLE managed_trades ADD COLUMN direction TEXT DEFAULT 'LONG'")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
+    for col, default in [('direction', "'LONG'"), ('partial_closed', '0'), ('original_size', '1')]:
+        try:
+            c.execute(f"ALTER TABLE managed_trades ADD COLUMN {col} TEXT DEFAULT {default}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
     c.execute('''CREATE TABLE IF NOT EXISTS modifications
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
@@ -205,6 +215,22 @@ def init_database():
     conn.close()
 
 
+def send_telegram(message: str, level: str = 'INFO'):
+    """Send a Telegram alert if configured."""
+    if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        prefix = {'WARNING': '⚠️', 'CRITICAL': '🛑', 'INFO': 'ℹ️'}.get(level, 'ℹ️')
+        import requests as _req
+        _req.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={'chat_id': TELEGRAM_CHAT_ID, 'text': f"{prefix} {message}", 'parse_mode': 'HTML'},
+            timeout=5,
+        )
+    except Exception as e:
+        logger.debug(f"Telegram send failed: {e}")
+
+
 def get_managed_trade(trade_id: int) -> Optional[Dict]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -213,15 +239,18 @@ def get_managed_trade(trade_id: int) -> Optional[Dict]:
     row = c.fetchone()
     conn.close()
     if row:
+        keys = row.keys()
         return {
             'trade_id':      row['trade_id'],
             'contract_id':   row['contract_id'],
-            'direction':     row['direction'],
+            'direction':     row['direction'] if 'direction' in keys else 'LONG',
             'entry_price':   row['entry_price'],
             'original_stop': row['original_stop'],
             'current_stop':  row['current_stop'],
             'stop_order_id': row['stop_order_id'],
             'be_moved':      bool(row['be_moved']),
+            'partial_closed': bool(row['partial_closed']) if 'partial_closed' in keys else False,
+            'original_size': int(row['original_size']) if 'original_size' in keys else 1,
             'first_seen':    row['first_seen'],
             'last_modified': row['last_modified'],
         }
@@ -233,13 +262,14 @@ def save_managed_trade(trade: Dict):
     c = conn.cursor()
     c.execute("""INSERT OR REPLACE INTO managed_trades
                  (trade_id, contract_id, direction, entry_price, original_stop, current_stop,
-                  stop_order_id, be_moved, first_seen, last_modified)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                  stop_order_id, be_moved, partial_closed, original_size, first_seen, last_modified)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                          COALESCE((SELECT first_seen FROM managed_trades WHERE trade_id = ?), ?),
                          ?)""",
               (trade['trade_id'], trade['contract_id'], trade.get('direction', 'LONG'),
                trade['entry_price'], trade['original_stop'], trade['current_stop'],
-               trade.get('stop_order_id'), int(trade['be_moved']),
+               trade.get('stop_order_id'), int(trade.get('be_moved', False)),
+               int(trade.get('partial_closed', False)), int(trade.get('original_size', 1)),
                trade['trade_id'], datetime.now().isoformat(), datetime.now().isoformat()))
     conn.commit()
     conn.close()
@@ -407,6 +437,8 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
             'current_stop':  original_stop,
             'stop_order_id': None,
             'be_moved':      False,
+            'partial_closed': False,
+            'original_size':  size,
         }
         save_managed_trade(managed)
         logger.info(
@@ -449,17 +481,50 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
         close_position_automated(client, trade, managed, 'MAE 80% rule')
         return pnl  # return realised PnL for daily accumulation
 
-    # ── TRAILING STOP ─────────────────────────────────────────────────────────
+    # ── PROGRESSIVE PROFIT TARGET (close 50% at 1.5x stop distance) ────────
+    stop_dist = abs(managed['entry_price'] - managed.get('original_stop', managed['current_stop']))
+    tp1_dist = stop_dist * PROGRESSIVE_TP_RATIO
+
+    if (PROGRESSIVE_TP_ENABLED and not managed.get('partial_closed', False)
+            and size >= 2 and profit_pts >= tp1_dist):
+        close_qty = max(1, int(size * PROGRESSIVE_TP_PCT))
+        logger.info(f"   TP1 HIT: +{profit_pts:.2f} pts >= {tp1_dist:.2f} pts (1.5x stop) "
+                    f"— closing {close_qty} of {size} contracts")
+        _close_side = 1 if direction == 'LONG' else 0
+        result = client.place_order(
+            account_id=trade.get('accountId'),
+            contract_id=managed['contract_id'],
+            order_type=2,
+            side=_close_side ^ 1,
+            size=close_qty,
+        )
+        if result and result.get('success'):
+            managed['partial_closed'] = True
+            save_managed_trade(managed)
+            log_modification(managed['trade_id'], 'PARTIAL_TP1', 0, profit_pts, True)
+            send_telegram(
+                f"<b>TP1</b> {instrument} #{trade_id} [{direction}]\n"
+                f"Closed {close_qty}/{size} @ +{profit_pts:.2f} pts (${pnl:+.2f})",
+                level='INFO'
+            )
+            logger.info(f"   ✅ TP1: closed {close_qty} contracts, trailing remainder")
+        else:
+            log_modification(managed['trade_id'], 'PARTIAL_TP1', 0, profit_pts, False)
+
+    # ── TRAILING STOP (instrument-aware distances) ───────────────────────────
+    trail_dist = params.get('trail_distance', TRAILING_DISTANCE_PTS)
     if TRAILING_ENABLED and managed['be_moved'] and live_price:
         if direction == 'LONG':
-            proposed = live_price - TRAILING_DISTANCE_PTS
+            proposed = round_to_tick(live_price - trail_dist, instrument)
             if proposed > managed['current_stop']:
-                logger.info(f"   Trail LONG: {managed['current_stop']:.4f} -> {proposed:.4f}")
+                logger.info(f"   Trail LONG: {managed['current_stop']:.4f} -> {proposed:.4f} "
+                            f"(dist={trail_dist} pts)")
                 move_stop_automated(client, trade, managed, proposed)
         else:
-            proposed = live_price + TRAILING_DISTANCE_PTS
+            proposed = round_to_tick(live_price + trail_dist, instrument)
             if proposed < managed['current_stop']:
-                logger.info(f"   Trail SHORT: {managed['current_stop']:.4f} -> {proposed:.4f}")
+                logger.info(f"   Trail SHORT: {managed['current_stop']:.4f} -> {proposed:.4f} "
+                            f"(dist={trail_dist} pts)")
                 move_stop_automated(client, trade, managed, proposed)
 
     # ── BREAKEVEN ─────────────────────────────────────────────────────────────
@@ -483,6 +548,9 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
 def main_loop():
     logger.info("=" * 60)
     logger.info("  AUTOMATED TRADE MANAGER — 24/7 FUTURES TRADING")
+    logger.info("  Progressive TP: close 50% at 1.5x stop, trail remainder")
+    logger.info("  Instrument-aware trailing: MNQ=2pt MES=1pt MGC=0.8pt MCL=0.05pt")
+    logger.info("  Telegram alerts: -$200 warning, -$400 pause")
     logger.info("  Supports: NY, London, Asia, UAE sessions")
     logger.info("=" * 60)
 
@@ -513,12 +581,32 @@ def main_loop():
 
             # Reset daily P&L on new calendar day
             if datetime.now().date() != _last_date:
+                send_telegram(f"<b>Daily Summary</b>\nPnL: ${daily_pnl:+.2f}", level='INFO')
                 logger.info(f"New day — resetting daily PnL (was ${daily_pnl:+.2f})")
                 daily_pnl  = 0.0
                 _last_date = datetime.now().date()
+                main_loop._warn_sent = False
+                main_loop._pause_sent = False
+
+            # Telegram PnL alerts
+            if TELEGRAM_ENABLED and daily_pnl <= TELEGRAM_PAUSE_PNL and not getattr(main_loop, '_pause_sent', False):
+                send_telegram(
+                    f"<b>🛑 DAILY PnL: ${daily_pnl:+.2f}</b>\n"
+                    f"Hit ${TELEGRAM_PAUSE_PNL} threshold — PAUSING TRADING",
+                    level='CRITICAL'
+                )
+                main_loop._pause_sent = True
+            elif TELEGRAM_ENABLED and daily_pnl <= TELEGRAM_WARNING_PNL and not getattr(main_loop, '_warn_sent', False):
+                send_telegram(
+                    f"<b>⚠️ DAILY PnL: ${daily_pnl:+.2f}</b>\n"
+                    f"Hit ${TELEGRAM_WARNING_PNL} warning threshold",
+                    level='WARNING'
+                )
+                main_loop._warn_sent = True
 
             # Enforce DAILY_MAX_LOSS circuit breaker
             if DAILY_MAX_LOSS is not None and daily_pnl <= DAILY_MAX_LOSS:
+                send_telegram(f"<b>🛑 MAX LOSS HIT: ${daily_pnl:+.2f}</b>\nTrade Manager STOPPED", level='CRITICAL')
                 logger.error(f"🛑 DAILY_MAX_LOSS hit: ${daily_pnl:.2f} — stopping trade manager")
                 break
 
