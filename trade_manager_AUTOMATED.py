@@ -78,14 +78,17 @@ TWILIO_ACCOUNT_SID     = os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN      = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_FROM   = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 
+# BE triggers set to 50% of default stop (let winners breathe before moving to BE)
+# Trail distances set to ~40% of default stop (wide enough to not get shaken out)
+# min_hold_seconds: minimum time before any stop modification (prevents 1-second exits)
 INSTRUMENT_PARAMS = {
-    'MNQ':  {'be_trigger': 0.375,  'be_move': 0.25, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 2.0},
-    'MES':  {'be_trigger': 0.15,   'be_move': 0.25, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.0},
-    'MGC':  {'be_trigger': 0.075,  'be_move': 0.10, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.8},
-    'MCL':  {'be_trigger': 0.0075, 'be_move': 0.01, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05},
-    'MCLE': {'be_trigger': 0.0075, 'be_move': 0.01, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05},
-    'MYM':  {'be_trigger': 1.5,    'be_move': 1.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 15.0},
-    'M2K':  {'be_trigger': 0.15,   'be_move': 0.10, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.0},
+    'MNQ':  {'be_trigger': 4.5,    'be_move': 0.50, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 3.5, 'min_hold_seconds': 30},
+    'MES':  {'be_trigger': 2.0,    'be_move': 0.50, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.5, 'min_hold_seconds': 30},
+    'MGC':  {'be_trigger': 0.90,   'be_move': 0.20, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.6, 'min_hold_seconds': 30},
+    'MCL':  {'be_trigger': 0.075,  'be_move': 0.02, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
+    'MCLE': {'be_trigger': 0.075,  'be_move': 0.02, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
+    'MYM':  {'be_trigger': 20.0,   'be_move': 2.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 12.0, 'min_hold_seconds': 30},
+    'M2K':  {'be_trigger': 2.0,    'be_move': 0.20, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.5, 'min_hold_seconds': 30},
 }
 
 CHECK_INTERVAL_SECONDS = 10
@@ -522,6 +525,19 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
         f"  entry={entry_price:.4f}  now={live_price:.4f}"
         f"  PnL ${pnl:+.2f} ({profit_pts:+.2f} pts)  [{price_source}]"
     )
+
+    # ── MINIMUM HOLD TIME (prevent premature exits / 1-second trades) ────────
+    min_hold = params.get('min_hold_seconds', 30)
+    first_seen = managed.get('first_seen', '')
+    if first_seen:
+        try:
+            entry_dt = datetime.fromisoformat(first_seen)
+            hold_seconds = (datetime.now() - entry_dt).total_seconds()
+            if hold_seconds < min_hold:
+                logger.debug(f"   Hold time {hold_seconds:.0f}s < {min_hold}s min — skip stop mods")
+                return
+        except Exception:
+            pass
 
     # ── MAE EXIT ──────────────────────────────────────────────────────────────
     stop_distance_pts     = abs(managed['entry_price'] - managed['current_stop'])
