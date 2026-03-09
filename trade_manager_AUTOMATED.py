@@ -103,7 +103,8 @@ def round_to_tick(price: float, instrument: str) -> float:
     """Round price to proper tick size for each instrument"""
     params = INSTRUMENT_PARAMS.get(instrument, {'tick_size': 0.01})
     tick = params.get('tick_size', 0.01)
-    return round(price / tick) * tick
+    decimals = max(0, len(str(tick).rstrip('0').split('.')[-1])) if '.' in str(tick) else 0
+    return round(round(price / tick) * tick, decimals)
 
 
 # ============================================================================
@@ -584,9 +585,10 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
     be_trigger = params['be_trigger']
     be_move    = params['be_move']
     if not managed['be_moved'] and profit_pts >= be_trigger:
-        new_stop = (
+        new_stop = round_to_tick(
             managed['entry_price'] + be_move if direction == 'LONG'
-            else managed['entry_price'] - be_move
+            else managed['entry_price'] - be_move,
+            instrument
         )
         logger.info(f"   Breakeven triggered: +{profit_pts:.2f} pts -> stop ${new_stop:.4f}")
         if move_stop_automated(client, trade, managed, new_stop):
