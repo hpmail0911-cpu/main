@@ -71,6 +71,13 @@ TELEGRAM_PAUSE_PNL     = -400
 TELEGRAM_BOT_TOKEN     = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID       = os.environ.get('TELEGRAM_CHAT_ID', '')
 
+WHATSAPP_ENABLED       = True
+WHATSAPP_PHONE         = os.environ.get('WHATSAPP_PHONE', '+13128382340')
+WHATSAPP_API_KEY       = os.environ.get('WHATSAPP_API_KEY', '')
+TWILIO_ACCOUNT_SID     = os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN      = os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_WHATSAPP_FROM   = os.environ.get('TWILIO_WHATSAPP_FROM', '')
+
 INSTRUMENT_PARAMS = {
     'MNQ':  {'be_trigger': 0.375,  'be_move': 0.25, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 2.0},
     'MES':  {'be_trigger': 0.15,   'be_move': 0.25, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.0},
@@ -229,6 +236,52 @@ def send_telegram(message: str, level: str = 'INFO'):
         )
     except Exception as e:
         logger.debug(f"Telegram send failed: {e}")
+
+
+def send_whatsapp(message: str, level: str = 'INFO'):
+    """Send a WhatsApp alert. Supports Twilio or CallMeBot."""
+    if not WHATSAPP_ENABLED or not WHATSAPP_PHONE:
+        return
+    prefix = {'WARNING': '⚠️', 'CRITICAL': '🛑', 'INFO': 'ℹ️'}.get(level, 'ℹ️')
+    text = f"{prefix} {message}".replace('<b>', '*').replace('</b>', '*').replace('<br>', '\n')
+
+    import requests as _req
+
+    # Method 1: Twilio WhatsApp API (most reliable, paid)
+    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM:
+        try:
+            _req.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
+                data={
+                    'From': f"whatsapp:{TWILIO_WHATSAPP_FROM}",
+                    'To': f"whatsapp:{WHATSAPP_PHONE}",
+                    'Body': text,
+                },
+                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                timeout=10,
+            )
+            return
+        except Exception as e:
+            logger.debug(f"Twilio WhatsApp failed: {e}")
+
+    # Method 2: CallMeBot (free, requires one-time registration)
+    if WHATSAPP_API_KEY:
+        try:
+            import urllib.parse
+            _req.get(
+                f"https://api.callmebot.com/whatsapp.php?"
+                f"phone={WHATSAPP_PHONE}&text={urllib.parse.quote(text)}&apikey={WHATSAPP_API_KEY}",
+                timeout=10,
+            )
+            return
+        except Exception as e:
+            logger.debug(f"CallMeBot WhatsApp failed: {e}")
+
+
+def send_alert(message: str, level: str = 'INFO'):
+    """Send alert via all configured channels."""
+    send_telegram(message, level)
+    send_whatsapp(message, level)
 
 
 def get_managed_trade(trade_id: int) -> Optional[Dict]:
@@ -502,11 +555,11 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
             managed['partial_closed'] = True
             save_managed_trade(managed)
             log_modification(managed['trade_id'], 'PARTIAL_TP1', 0, profit_pts, True)
-            send_telegram(
-                f"<b>TP1</b> {instrument} #{trade_id} [{direction}]\n"
-                f"Closed {close_qty}/{size} @ +{profit_pts:.2f} pts (${pnl:+.2f})",
-                level='INFO'
-            )
+            send_alert(
+                    f"<b>TP1</b> {instrument} #{trade_id} [{direction}]\n"
+                    f"Closed {close_qty}/{size} @ +{profit_pts:.2f} pts (${pnl:+.2f})",
+                    level='INFO'
+                )
             logger.info(f"   ✅ TP1: closed {close_qty} contracts, trailing remainder")
         else:
             log_modification(managed['trade_id'], 'PARTIAL_TP1', 0, profit_pts, False)
@@ -581,7 +634,7 @@ def main_loop():
 
             # Reset daily P&L on new calendar day
             if datetime.now().date() != _last_date:
-                send_telegram(f"<b>Daily Summary</b>\nPnL: ${daily_pnl:+.2f}", level='INFO')
+                send_alert(f"<b>Daily Summary</b>\nPnL: ${daily_pnl:+.2f}", level='INFO')
                 logger.info(f"New day — resetting daily PnL (was ${daily_pnl:+.2f})")
                 daily_pnl  = 0.0
                 _last_date = datetime.now().date()
@@ -589,15 +642,15 @@ def main_loop():
                 main_loop._pause_sent = False
 
             # Telegram PnL alerts
-            if TELEGRAM_ENABLED and daily_pnl <= TELEGRAM_PAUSE_PNL and not getattr(main_loop, '_pause_sent', False):
-                send_telegram(
+            if (TELEGRAM_ENABLED or WHATSAPP_ENABLED) and daily_pnl <= TELEGRAM_PAUSE_PNL and not getattr(main_loop, '_pause_sent', False):
+                send_alert(
                     f"<b>🛑 DAILY PnL: ${daily_pnl:+.2f}</b>\n"
                     f"Hit ${TELEGRAM_PAUSE_PNL} threshold — PAUSING TRADING",
                     level='CRITICAL'
                 )
                 main_loop._pause_sent = True
-            elif TELEGRAM_ENABLED and daily_pnl <= TELEGRAM_WARNING_PNL and not getattr(main_loop, '_warn_sent', False):
-                send_telegram(
+            elif (TELEGRAM_ENABLED or WHATSAPP_ENABLED) and daily_pnl <= TELEGRAM_WARNING_PNL and not getattr(main_loop, '_warn_sent', False):
+                send_alert(
                     f"<b>⚠️ DAILY PnL: ${daily_pnl:+.2f}</b>\n"
                     f"Hit ${TELEGRAM_WARNING_PNL} warning threshold",
                     level='WARNING'
@@ -606,7 +659,7 @@ def main_loop():
 
             # Enforce DAILY_MAX_LOSS circuit breaker
             if DAILY_MAX_LOSS is not None and daily_pnl <= DAILY_MAX_LOSS:
-                send_telegram(f"<b>🛑 MAX LOSS HIT: ${daily_pnl:+.2f}</b>\nTrade Manager STOPPED", level='CRITICAL')
+                send_alert(f"<b>🛑 MAX LOSS HIT: ${daily_pnl:+.2f}</b>\nTrade Manager STOPPED", level='CRITICAL')
                 logger.error(f"🛑 DAILY_MAX_LOSS hit: ${daily_pnl:.2f} — stopping trade manager")
                 break
 
