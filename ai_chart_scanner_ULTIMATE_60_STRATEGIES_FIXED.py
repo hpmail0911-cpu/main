@@ -381,7 +381,7 @@ ALL_STRATEGIES = {
 # ==============================================================================
 
 WEBHOOK_URL = "http://localhost:5002/webhook/tradingview"  # ultimate_entry_validator (10 validation layers)
-SCAN_INTERVAL_SECONDS = 60  # Rate limit protection
+SCAN_INTERVAL_SECONDS = 90  # Rate limit protection (staggered with GROQ V5 at 60s)
 DEDUP_WINDOW_MINUTES = 15
 
 # ==============================================================================
@@ -1935,8 +1935,7 @@ def scan_all_strategies():
                 _cycle_sent.add(cycle_key)   # lock this instrument+direction for rest of cycle
                 signals_sent += 1
         
-        # Small delay to avoid rate limits
-        time.sleep(0.05)
+        time.sleep(1.0)  # Rate limit: 1s between strategy checks (3 scanners share Yahoo quota)
     
     return signals_found, signals_sent
 

@@ -2058,7 +2058,7 @@ def prefetch_all_data():
     successful = 0
     failed = 0
     
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {executor.submit(fetch_one, combo): combo for combo in combinations_needed}
         
         for future in as_completed(futures):
