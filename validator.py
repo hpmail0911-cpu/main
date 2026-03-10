@@ -966,11 +966,14 @@ def _process_signal():
         _action_map = {'LONG': 'buy', 'SHORT': 'sell', 'buy': 'buy', 'sell': 'sell'}
         _sl_price   = alert_data.get('stop_loss')
         _tp_price   = alert_data.get('take_profit')
+        # HARD LOCK: 1 contract during testing period (until 2026-03-15)
+        _testing_end = '2026-03-15'
+        _max_qty = 1 if datetime.now().strftime('%Y-%m-%d') <= _testing_end else int(alert_data.get('position_size', 1))
         tp_payload  = {
             'ticker':     symbol,
             'action':     _action_map.get(action, action.lower()),
             'price':      alert_data.get('entry') or alert_data.get('entry_price') or alert_data.get('close_1m'),
-            'quantity':   alert_data.get('position_size', 1),
+            'quantity':   _max_qty,
             'stopLoss':   {'type': 'stop',  'stopPrice':  round(float(_sl_price), 2)} if _sl_price else None,
             'takeProfit': {'type': 'limit', 'limitPrice': round(float(_tp_price), 2)} if _tp_price else None,
             'strategy':   strategy,
