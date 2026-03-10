@@ -371,6 +371,12 @@ class TradeOutcomeTracker:
         logger.info(f"  {win_loss} {instrument} {strategy} {direction} "
                     f"PnL=${pnl:+.2f} ({outcome})")
 
+        try:
+            from enhanced_signal_filter import EnhancedSignalFilter
+            EnhancedSignalFilter.record_instrument_pnl(instrument, pnl)
+        except Exception:
+            pass
+
     def _update_validator_db(self, trade_id: str, outcome: str, pnl: float):
         """Update the validator's todays_trades with the actual result."""
         if not os.path.exists(VALIDATOR_DB):

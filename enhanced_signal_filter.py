@@ -36,6 +36,11 @@ REGIME_BLOCK = {'RANGING', 'CONSOLIDATING', 'CHOPPY'}
 REGIME_ALLOW_ALL = {'MOMENTUM', 'TRENDING'}
 REGIME_BREAKOUT_ONLY = {'RANGING', 'CONSOLIDATING'}
 
+MAX_ATR_SPIKE_RATIO = 2.0
+INSTRUMENT_DAILY_LOSS_LIMIT = -70
+_instrument_daily_pnl: Dict = {}
+_instrument_daily_date: str = ''
+
 
 @dataclass
 class FilterDecision:
@@ -217,6 +222,35 @@ class EnhancedSignalFilter:
 
             adjustments['advanced_patterns'] = [p.pattern for p in matching]
 
+        # ── Layer 10: Volatility Spike Filter ────────────────────────────
+        if df_entry is not None and len(df_entry) >= 20:
+            try:
+                current_range = float(df_entry['High'].iloc[-1] - df_entry['Low'].iloc[-1])
+                avg_range = float((df_entry['High'] - df_entry['Low']).rolling(20).mean().iloc[-2])
+                if avg_range > 0:
+                    range_ratio = current_range / avg_range
+                    if range_ratio > MAX_ATR_SPIKE_RATIO:
+                        score -= 15
+                        reasons.append(f"VOLATILITY SPIKE: bar range {range_ratio:.1f}x avg (too volatile)")
+                    elif range_ratio > 1.5:
+                        score -= 5
+                        reasons.append(f"elevated volatility: {range_ratio:.1f}x avg")
+            except Exception:
+                pass
+
+        # ── Layer 11: Per-Instrument Daily Loss Limit ────────────────────
+        global _instrument_daily_pnl, _instrument_daily_date
+        from datetime import datetime as _dt
+        today = _dt.now().strftime('%Y-%m-%d')
+        if today != _instrument_daily_date:
+            _instrument_daily_pnl = {}
+            _instrument_daily_date = today
+        instrument = signal.get('instrument', signal.get('ticker', ''))
+        inst_pnl = _instrument_daily_pnl.get(instrument, 0)
+        if inst_pnl <= INSTRUMENT_DAILY_LOSS_LIMIT:
+            score = 0
+            reasons.append(f"BLOCKED: {instrument} daily loss ${inst_pnl:.0f} hit limit ${INSTRUMENT_DAILY_LOSS_LIMIT}")
+
         # ── FINAL DECISION ───────────────────────────────────────────────
         score = max(0, min(100, score))
 
@@ -254,6 +288,17 @@ class EnhancedSignalFilter:
             reasons=reasons,
             adjustments=adjustments,
         )
+
+    @staticmethod
+    def record_instrument_pnl(instrument: str, pnl: float):
+        """Called by learning agent when a trade outcome is recorded."""
+        global _instrument_daily_pnl, _instrument_daily_date
+        from datetime import datetime as _dt
+        today = _dt.now().strftime('%Y-%m-%d')
+        if today != _instrument_daily_date:
+            _instrument_daily_pnl = {}
+            _instrument_daily_date = today
+        _instrument_daily_pnl[instrument] = _instrument_daily_pnl.get(instrument, 0) + pnl
 
     def get_stats(self) -> Dict:
         total = self.stats['evaluated'] or 1
