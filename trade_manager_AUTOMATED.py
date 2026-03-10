@@ -485,6 +485,7 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
             entry_price - params['default_stop'] if direction == 'LONG'
             else entry_price + params['default_stop']
         )
+        original_stop = round_to_tick(original_stop, instrument)
         managed = {
             'trade_id':      trade_id,
             'contract_id':   contract_id,
@@ -497,11 +498,44 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
             'partial_closed': False,
             'original_size':  size,
         }
+
+        # ── IMMEDIATELY PLACE HARD STOP ON EXCHANGE ──────────────────────
+        close_side = 1 if direction == 'LONG' else 0
+        stop_side = close_side ^ 1  # opposite side to close
+        stop_result = None
+        for _attempt in range(STOP_RETRY_ATTEMPTS):
+            stop_result = client.place_order(
+                account_id=trade.get('accountId'),
+                contract_id=contract_id,
+                order_type=2,   # Stop Market
+                side=stop_side,
+                size=size,
+                stop_price=original_stop,
+            )
+            if stop_result and stop_result.get('success'):
+                managed['stop_order_id'] = stop_result.get('orderId')
+                break
+            time.sleep(STOP_RETRY_DELAY)
+
+        if managed.get('stop_order_id'):
+            logger.info(
+                f"New trade: {trade_id} ({instrument}) [{direction}]"
+                f"  entry=${entry_price:.4f}  HARD STOP=${original_stop:.4f}"
+                f"  (order #{managed['stop_order_id']})"
+            )
+        else:
+            logger.error(
+                f"New trade: {trade_id} ({instrument}) [{direction}]"
+                f"  entry=${entry_price:.4f}  ⚠️ STOP FAILED — relying on MAE"
+            )
+            send_alert(
+                f"<b>⚠️ STOP FAILED</b> {instrument} #{trade_id} [{direction}]\n"
+                f"Entry: ${entry_price:.4f} | Stop should be: ${original_stop:.4f}\n"
+                f"NO HARD STOP ON EXCHANGE — MAE only",
+                level='CRITICAL'
+            )
+
         save_managed_trade(managed)
-        logger.info(
-            f"New trade: {trade_id} ({instrument}) [{direction}]"
-            f"  entry=${entry_price:.4f}  stop=${original_stop:.4f}"
-        )
 
     if managed.get('direction') != direction:
         logger.info(f"   Direction updated: {managed.get('direction')} -> {direction}")
