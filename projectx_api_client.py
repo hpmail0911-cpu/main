@@ -276,91 +276,137 @@ class ProjectXClient:
     def get_open_positions(self, account_id: int) -> List[Dict]:
         """
         Returns only OPEN positions, netted by contract.
-        
-        The /api/Trade/search endpoint returns ALL fills (758 historical).
-        Open fills have profitAndLoss=null (entry with no matching exit).
-        This method nets fills by contractId to return true open positions.
+
+        Uses only fills with profitAndLoss=null (unfilled entries) to determine
+        open positions. Closed fills (pnl != null) are excluded from entry price
+        calculation to prevent stale price averaging.
+
+        FIX: Previously averaged ALL buy/sell fills including closed ones,
+        producing wrong entry prices (e.g. $5166 when current price is $5206).
+        Now only uses open (unmatched) fills for entry price.
         """
         all_fills = self.get_positions(account_id)
 
-        # Only consider fills from the current trading session (last 24h)
-        # Netting ALL historical fills causes open positions to appear closed
         from collections import defaultdict
         from datetime import datetime, timezone, timedelta
         from dateutil import parser as dtparser
         cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=24)
+
         def _is_recent(f):
             ts = f.get('creationTimestamp', '')
             try:
                 return dtparser.parse(ts) >= cutoff_dt
             except Exception:
                 return False
+
         session_fills = [f for f in all_fills if _is_recent(f)]
         logger.info(f"📊 Session fills (last 24h): {len(session_fills)} of {len(all_fills)} total")
 
         contracts = defaultdict(list)
         for fill in session_fills:
             contracts[fill['contractId']].append(fill)
-        
+
         open_positions = []
         for contract_id, fills in contracts.items():
-            # Net the size: side=1 (buy) adds, side=0 (sell) subtracts
-            net_size = 0
-            total_buy  = 0
-            total_sell = 0
-            entry_fills = []
-            
-            for f in fills:
+            # Separate open fills (pnl=null) from closed fills (pnl has value)
+            open_buys = []
+            open_sells = []
+            closed_buy_qty = 0
+            closed_sell_qty = 0
+
+            # Sort by timestamp so we process oldest first
+            sorted_fills = sorted(fills, key=lambda f: f.get('creationTimestamp', ''))
+
+            for f in sorted_fills:
                 if f.get('voided'):
                     continue
                 size = int(f.get('size', 0))
-                if f.get('side') == 1:   # Buy
-                    net_size   += size
-                    total_buy  += size
-                    if f.get('profitAndLoss') is None:
-                        entry_fills.append(f)
-                else:                     # Sell
-                    net_size   -= size
-                    total_sell += size
-            
-            if net_size > 0:
-                # Still long — find weighted average entry price
-                buy_fills = [f for f in fills if f.get('side') == 1 and not f.get('voided')]
-                if buy_fills:
-                    avg_entry = sum(f['price'] * f['size'] for f in buy_fills) / sum(f['size'] for f in buy_fills)
-                    latest = max(buy_fills, key=lambda f: f['creationTimestamp'])
-                    open_positions.append({
-                        'id':                  latest['id'],
-                        'accountId':           account_id,
-                        'contractId':          contract_id,
-                        'creationTimestamp':   latest['creationTimestamp'],
-                        'price':               round(avg_entry, 4),
-                        'profitAndLoss':       None,
-                        'side':                1,
-                        'size':                net_size,
-                        'voided':              False,
-                        'orderId':             latest['orderId'],
-                        '_net_long':           True,
-                    })
-            elif net_size < 0:
-                # Still short
-                sell_fills = [f for f in fills if f.get('side') == 0 and not f.get('voided')]
-                if sell_fills:
-                    avg_entry = sum(f['price'] * f['size'] for f in sell_fills) / sum(f['size'] for f in sell_fills)
-                    latest = max(sell_fills, key=lambda f: f['creationTimestamp'])
-                    open_positions.append({
-                        'id':                  latest['id'],
-                        'accountId':           account_id,
-                        'contractId':          contract_id,
-                        'creationTimestamp':   latest['creationTimestamp'],
-                        'price':               round(avg_entry, 4),
-                        'profitAndLoss':       None,
-                        'side':                0,
-                        'size':                abs(net_size),
-                        'voided':              False,
-                        'orderId':             latest['orderId'],
-                        '_net_short':          True,
-                    })
+                has_pnl = f.get('profitAndLoss') is not None
+
+                if f.get('side') == 1:  # Buy
+                    if has_pnl:
+                        closed_buy_qty += size
+                    else:
+                        open_buys.append(f)
+                else:  # Sell
+                    if has_pnl:
+                        closed_sell_qty += size
+                    else:
+                        open_sells.append(f)
+
+            # Net: open buys - open sells = position
+            open_buy_qty = sum(int(f.get('size', 0)) for f in open_buys)
+            open_sell_qty = sum(int(f.get('size', 0)) for f in open_sells)
+            net_size = open_buy_qty - open_sell_qty
+
+            if net_size > 0 and open_buys:
+                # Long position — use only OPEN buy fills for entry price
+                # Take the most recent fills that account for net_size
+                recent_buys = sorted(open_buys, key=lambda f: f.get('creationTimestamp', ''), reverse=True)
+                remaining = net_size
+                entry_fills = []
+                for f in recent_buys:
+                    if remaining <= 0:
+                        break
+                    entry_fills.append(f)
+                    remaining -= int(f.get('size', 0))
+
+                total_qty = sum(int(f.get('size', 0)) for f in entry_fills)
+                if total_qty > 0:
+                    avg_entry = sum(f['price'] * int(f.get('size', 0)) for f in entry_fills) / total_qty
+                else:
+                    avg_entry = entry_fills[0]['price'] if entry_fills else 0
+
+                latest = entry_fills[0]  # most recent
+                open_positions.append({
+                    'id':                latest['id'],
+                    'accountId':         account_id,
+                    'contractId':        contract_id,
+                    'creationTimestamp': latest['creationTimestamp'],
+                    'price':             round(avg_entry, 4),
+                    'averagePrice':      round(avg_entry, 4),
+                    'profitAndLoss':     None,
+                    'side':              1,
+                    'size':              net_size,
+                    'netSize':           net_size,
+                    'voided':            False,
+                    'orderId':           latest.get('orderId'),
+                    '_net_long':         True,
+                })
+
+            elif net_size < 0 and open_sells:
+                # Short position — use only OPEN sell fills for entry price
+                recent_sells = sorted(open_sells, key=lambda f: f.get('creationTimestamp', ''), reverse=True)
+                remaining = abs(net_size)
+                entry_fills = []
+                for f in recent_sells:
+                    if remaining <= 0:
+                        break
+                    entry_fills.append(f)
+                    remaining -= int(f.get('size', 0))
+
+                total_qty = sum(int(f.get('size', 0)) for f in entry_fills)
+                if total_qty > 0:
+                    avg_entry = sum(f['price'] * int(f.get('size', 0)) for f in entry_fills) / total_qty
+                else:
+                    avg_entry = entry_fills[0]['price'] if entry_fills else 0
+
+                latest = entry_fills[0]
+                open_positions.append({
+                    'id':                latest['id'],
+                    'accountId':         account_id,
+                    'contractId':        contract_id,
+                    'creationTimestamp': latest['creationTimestamp'],
+                    'price':             round(avg_entry, 4),
+                    'averagePrice':      round(avg_entry, 4),
+                    'profitAndLoss':     None,
+                    'side':              0,
+                    'size':              abs(net_size),
+                    'netSize':           net_size,
+                    'voided':            False,
+                    'orderId':           latest.get('orderId'),
+                    '_net_short':        True,
+                })
             # net_size == 0 means fully closed — skip
 
         logger.info(f"📊 Open positions: {len(open_positions)} (from {len(all_fills)} fills)")
