@@ -377,6 +377,13 @@ class TradeOutcomeTracker:
         except Exception:
             pass
 
+        if pnl < 0:
+            try:
+                from signal_gate import record_loss
+                record_loss(instrument)
+            except Exception:
+                pass
+
     def _update_validator_db(self, trade_id: str, outcome: str, pnl: float):
         """Update the validator's todays_trades with the actual result."""
         if not os.path.exists(VALIDATOR_DB):

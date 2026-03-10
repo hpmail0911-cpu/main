@@ -40,10 +40,33 @@ _initialized = False
 _VISION_COOLDOWN = {}
 VISION_COOLDOWN_SECONDS = 30
 
-# Position size lock: 1 micro contract per trade during testing period.
-# After TESTING_END_DATE, the learning agent's adaptive sizing takes over.
 TESTING_SIZE_LOCK = 1
 TESTING_END_DATE = '2026-03-15'
+
+# ── Trade cooldowns (prevent overtrading + re-entry after loss) ──────────
+INSTRUMENT_COOLDOWN_SECONDS = 300      # 5 min between trades on same instrument
+LOSS_COOLDOWN_SECONDS = 600            # 10 min cooldown after a loss on same instrument
+_last_signal_time: Dict[str, float] = {}
+_last_loss_time: Dict[str, float] = {}
+
+# ── Session quality gate adjustments ─────────────────────────────────────
+SESSION_QUALITY_BOOST = {
+    'NY': 0,          # baseline
+    'London': 5,      # +5 quality required (51.7% WR)
+    'Asian': 10,      # +10 quality required (34% WR — needs stricter filter)
+    'Asia': 10,
+    'UAE': 10,
+}
+
+# ── Per-instrument confluence adjustments (from real performance data) ───
+INSTRUMENT_CONFLUENCE_BOOST = {
+    'MES': 0,         # 60% WR — baseline
+    'MNQ': 0,         # 58% WR — baseline
+    'MGC': 5,         # 17% WR — needs stricter filter
+    'MCL': 5,         # 33% WR — needs stricter
+    'M2K': 10,        # 42% WR — much stricter
+    'MYM': 15,        # 20% WR — very strict, near-disable
+}
 
 
 def init_gate():
@@ -113,6 +136,53 @@ def gate_signal(instrument: str, action: str, signal_data: Dict,
     if not _signal_filter:
         return result
 
+    now = time.time()
+
+    # ── Instrument cooldown: 5 min between trades on same instrument ─────
+    last_sig = _last_signal_time.get(instrument, 0)
+    if now - last_sig < INSTRUMENT_COOLDOWN_SECONDS:
+        remaining = int(INSTRUMENT_COOLDOWN_SECONDS - (now - last_sig))
+        result['approved'] = False
+        result['reasons'] = [f"COOLDOWN: {instrument} traded {int(now - last_sig)}s ago "
+                             f"(wait {remaining}s)"]
+        logger.info(f"  Gate: COOLDOWN {instrument} — {remaining}s remaining")
+        return result
+
+    # ── Loss cooldown: 10 min after a loss on same instrument ────────────
+    last_loss = _last_loss_time.get(instrument, 0)
+    if now - last_loss < LOSS_COOLDOWN_SECONDS:
+        remaining = int(LOSS_COOLDOWN_SECONDS - (now - last_loss))
+        result['approved'] = False
+        result['reasons'] = [f"LOSS COOLDOWN: {instrument} lost recently "
+                             f"(wait {remaining}s)"]
+        logger.info(f"  Gate: LOSS COOLDOWN {instrument} — {remaining}s remaining")
+        return result
+
+    # ── Session quality boost ────────────────────────────────────────────
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _et = _dt.now(_tz.utc).astimezone(_tz(_td(hours=-5)))
+    _h = _et.hour
+    if 9 <= _h < 16:
+        _session = 'NY'
+    elif 3 <= _h < 9:
+        _session = 'London'
+    else:
+        _session = 'Asian'
+
+    _session_boost = SESSION_QUALITY_BOOST.get(_session, 0)
+    _inst_boost = INSTRUMENT_CONFLUENCE_BOOST.get(instrument, 0)
+    if _session_boost > 0 or _inst_boost > 0:
+        current_q = int(signal_data.get('quality_score', 0))
+        required_q = 75 + _session_boost
+        if current_q < required_q:
+            result['approved'] = False
+            result['reasons'] = [f"BLOCKED: {_session} session requires quality "
+                                 f"{required_q} (got {current_q})"]
+            logger.info(f"  Gate: {_session} quality gate {required_q} > {current_q}")
+            return result
+
+        _signal_filter.min_confluence = 65 + _inst_boost
+
     vision_result = None
     pattern_signals = None
     df_entry = df_5m if df_5m is not None and len(df_5m) >= 20 else df_1m
@@ -179,13 +249,25 @@ def gate_signal(instrument: str, action: str, signal_data: Dict,
     if decision.adjustments.get('vision_target'):
         result['take_profit'] = decision.adjustments['vision_target']
 
+    # Reset min_confluence if it was boosted for this instrument
+    _signal_filter.min_confluence = 65
+
+    if result['approved']:
+        _last_signal_time[instrument] = time.time()
+
     status = "APPROVED" if decision.approved else "BLOCKED"
     size_note = f" | SIZE LOCKED: {TESTING_SIZE_LOCK}" if result.get('position_size_override') else ""
     logger.info(f"  Gate: {status} | Confluence: {decision.confluence_score}/100 | "
-                f"AI: {decision.ai_confidence:.0%}{size_note} | "
+                f"AI: {decision.ai_confidence:.0%} | {_session}{size_note} | "
                 f"{'; '.join(decision.reasons[-3:])}")
 
     return result
+
+
+def record_loss(instrument: str):
+    """Called by learning agent when a loss is detected — sets cooldown timer."""
+    _last_loss_time[instrument] = time.time()
+    logger.info(f"  Gate: {instrument} loss cooldown started ({LOSS_COOLDOWN_SECONDS}s)")
 
 
 def get_gate_stats() -> Dict:
