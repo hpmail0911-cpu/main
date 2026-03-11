@@ -78,15 +78,16 @@ TWILIO_ACCOUNT_SID     = os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN      = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_FROM   = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 
-# BE triggers per user specification: MNQ/MES/MYM/M2K=2.58pts, MGC=1.25pts, MCL=1.05pts
+# BE triggers in USD: MNQ/MES/MYM/M2K=$2.58, MGC/MCL=$1.25
+# Converted to points: USD / point_value
 INSTRUMENT_PARAMS = {
-    'MNQ':  {'be_trigger': 2.58,   'be_move': 0.50, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 3.5, 'min_hold_seconds': 30},
-    'MES':  {'be_trigger': 2.58,   'be_move': 0.50, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.5, 'min_hold_seconds': 30},
-    'MGC':  {'be_trigger': 1.25,   'be_move': 0.20, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.6, 'min_hold_seconds': 30},
-    'MCL':  {'be_trigger': 0.0105, 'be_move': 0.005,'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
-    'MCLE': {'be_trigger': 0.0105, 'be_move': 0.005,'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
-    'MYM':  {'be_trigger': 2.58,   'be_move': 1.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 12.0, 'min_hold_seconds': 30},
-    'M2K':  {'be_trigger': 2.58,   'be_move': 0.20, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.5, 'min_hold_seconds': 30},
+    'MNQ':  {'be_trigger': 1.29,    'be_move': 0.50, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 3.5, 'min_hold_seconds': 30},
+    'MES':  {'be_trigger': 0.516,   'be_move': 0.25, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.5, 'min_hold_seconds': 30},
+    'MGC':  {'be_trigger': 0.125,   'be_move': 0.10, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.6, 'min_hold_seconds': 30},
+    'MCL':  {'be_trigger': 0.0125,  'be_move': 0.005,'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
+    'MCLE': {'be_trigger': 0.0125,  'be_move': 0.005,'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
+    'MYM':  {'be_trigger': 5.16,    'be_move': 1.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 12.0, 'min_hold_seconds': 30},
+    'M2K':  {'be_trigger': 0.516,   'be_move': 0.20, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.5, 'min_hold_seconds': 30},
 }
 
 # Per-instrument circuit breaker: stop trading after 2 consecutive losses or $70 loss
