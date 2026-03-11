@@ -78,18 +78,23 @@ TWILIO_ACCOUNT_SID     = os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN      = os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_WHATSAPP_FROM   = os.environ.get('TWILIO_WHATSAPP_FROM', '')
 
-# BE triggers set to 50% of default stop (let winners breathe before moving to BE)
-# Trail distances set to ~40% of default stop (wide enough to not get shaken out)
-# min_hold_seconds: minimum time before any stop modification (prevents 1-second exits)
+# BE triggers per user specification: MNQ/MES/MYM/M2K=2.58pts, MGC=1.25pts, MCL=1.05pts
 INSTRUMENT_PARAMS = {
-    'MNQ':  {'be_trigger': 4.5,    'be_move': 0.50, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 3.5, 'min_hold_seconds': 30},
-    'MES':  {'be_trigger': 2.0,    'be_move': 0.50, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.5, 'min_hold_seconds': 30},
-    'MGC':  {'be_trigger': 0.90,   'be_move': 0.20, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.6, 'min_hold_seconds': 30},
-    'MCL':  {'be_trigger': 0.075,  'be_move': 0.02, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
-    'MCLE': {'be_trigger': 0.075,  'be_move': 0.02, 'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
-    'MYM':  {'be_trigger': 20.0,   'be_move': 2.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 12.0, 'min_hold_seconds': 30},
-    'M2K':  {'be_trigger': 2.0,    'be_move': 0.20, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.5, 'min_hold_seconds': 30},
+    'MNQ':  {'be_trigger': 2.58,   'be_move': 0.50, 'point_value': 2.0,   'default_stop': 9.0,  'tick_size': 0.25, 'trail_distance': 3.5, 'min_hold_seconds': 30},
+    'MES':  {'be_trigger': 2.58,   'be_move': 0.50, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.25, 'trail_distance': 1.5, 'min_hold_seconds': 30},
+    'MGC':  {'be_trigger': 1.25,   'be_move': 0.20, 'point_value': 10.0,  'default_stop': 1.8,  'tick_size': 0.10, 'trail_distance': 0.6, 'min_hold_seconds': 30},
+    'MCL':  {'be_trigger': 0.0105, 'be_move': 0.005,'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
+    'MCLE': {'be_trigger': 0.0105, 'be_move': 0.005,'point_value': 100.0, 'default_stop': 0.15, 'tick_size': 0.01, 'trail_distance': 0.05, 'min_hold_seconds': 30},
+    'MYM':  {'be_trigger': 2.58,   'be_move': 1.0,  'point_value': 0.50,  'default_stop': 40.0, 'tick_size': 1.0,  'trail_distance': 12.0, 'min_hold_seconds': 30},
+    'M2K':  {'be_trigger': 2.58,   'be_move': 0.20, 'point_value': 5.0,   'default_stop': 4.0,  'tick_size': 0.10, 'trail_distance': 1.5, 'min_hold_seconds': 30},
 }
+
+# Per-instrument circuit breaker: stop trading after 2 consecutive losses or $70 loss
+INSTRUMENT_MAX_CONSEC_LOSSES = 2
+INSTRUMENT_MAX_DAILY_LOSS = -70
+_instrument_losses: Dict[str, List[float]] = {}
+_instrument_blocked: Dict[str, str] = {}
+_instrument_loss_date: str = ''
 
 CHECK_INTERVAL_SECONDS = 10
 DB_PATH = "trade_manager_auto.db"
@@ -224,6 +229,70 @@ def init_database():
                   success INTEGER)''')
     conn.commit()
     conn.close()
+
+
+def check_instrument_circuit_breaker(instrument: str) -> bool:
+    """Returns True if instrument is BLOCKED (should not trade)."""
+    global _instrument_losses, _instrument_blocked, _instrument_loss_date
+    today = datetime.now().strftime('%Y-%m-%d')
+    if today != _instrument_loss_date:
+        _instrument_losses = {}
+        _instrument_blocked = {}
+        _instrument_loss_date = today
+    return instrument in _instrument_blocked
+
+
+def record_instrument_loss(instrument: str, pnl: float):
+    """Record a loss for circuit breaker tracking."""
+    global _instrument_losses, _instrument_blocked, _instrument_loss_date
+    today = datetime.now().strftime('%Y-%m-%d')
+    if today != _instrument_loss_date:
+        _instrument_losses = {}
+        _instrument_blocked = {}
+        _instrument_loss_date = today
+
+    if instrument not in _instrument_losses:
+        _instrument_losses[instrument] = []
+    _instrument_losses[instrument].append(pnl)
+
+    losses = _instrument_losses[instrument]
+    daily_total = sum(losses)
+    consec = 0
+    for p in reversed(losses):
+        if p < 0:
+            consec += 1
+        else:
+            break
+
+    if consec >= INSTRUMENT_MAX_CONSEC_LOSSES:
+        _instrument_blocked[instrument] = f"{consec} consecutive losses"
+        logger.warning(f"🛑 {instrument} BLOCKED: {consec} consecutive losses")
+        send_alert(f"<b>🛑 {instrument} BLOCKED</b>\n{consec} consecutive losses\n"
+                   f"Daily total: ${daily_total:+.2f}\n"
+                   f"Use /unblock_{instrument.lower()} to resume", level='CRITICAL')
+
+    if daily_total <= INSTRUMENT_MAX_DAILY_LOSS:
+        _instrument_blocked[instrument] = f"Daily loss ${daily_total:.2f}"
+        logger.warning(f"🛑 {instrument} BLOCKED: Daily loss ${daily_total:.2f}")
+        send_alert(f"<b>🛑 {instrument} BLOCKED</b>\n"
+                   f"Daily loss: ${daily_total:+.2f} (limit: ${INSTRUMENT_MAX_DAILY_LOSS})\n"
+                   f"Use /unblock_{instrument.lower()} to resume", level='CRITICAL')
+
+
+def unblock_instrument(instrument: str):
+    """Manually unblock an instrument after reviewing losses."""
+    global _instrument_blocked
+    if instrument in _instrument_blocked:
+        reason = _instrument_blocked.pop(instrument)
+        logger.info(f"✅ {instrument} UNBLOCKED (was: {reason})")
+        send_alert(f"<b>✅ {instrument} UNBLOCKED</b>\nTrading resumed", level='INFO')
+        return True
+    return False
+
+
+def get_blocked_instruments() -> Dict[str, str]:
+    """Return dict of blocked instruments and reasons."""
+    return dict(_instrument_blocked)
 
 
 def send_telegram(message: str, level: str = 'INFO'):
@@ -446,6 +515,10 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
     contract_id = trade.get('contractId', '')
     direction   = detect_direction(trade)
     instrument, params = get_instrument_params(contract_id)
+
+    if check_instrument_circuit_breaker(instrument):
+        logger.debug(f"  {instrument} #{trade_id} — BLOCKED by circuit breaker, skipping")
+        return None
     size        = abs(int(trade.get('netSize') or trade.get('openSize') or 1))
     point_value = params['point_value']
 
@@ -583,6 +656,7 @@ def manage_trade(client: ProjectXClient, trade: Dict) -> Optional[float]:
             f"{MAE_PERCENTAGE*100:.0f}% of stop (${stop_distance_dollars:.2f})"
         )
         close_position_automated(client, trade, managed, 'MAE 80% rule')
+        record_instrument_loss(instrument, pnl)
         return pnl  # return realised PnL for daily accumulation
 
     # ── PROGRESSIVE PROFIT TARGET (close 50% at 1.5x stop distance) ────────
@@ -727,7 +801,16 @@ def main_loop():
                 except Exception as e:
                     logger.error(f"Token refresh failed: {e}")
 
+            # Check for unblock requests (touch file: unblock_MGC, unblock_MES, etc.)
+            for _ub_file in [f for f in os.listdir('.') if f.startswith('unblock_')]:
+                _ub_inst = _ub_file.replace('unblock_', '').upper()
+                if unblock_instrument(_ub_inst):
+                    os.remove(_ub_file)
+
             if iteration % 12 == 1:
+                blocked = get_blocked_instruments()
+                if blocked:
+                    logger.warning(f"  BLOCKED instruments: {blocked}")
                 logger.info(f"\nCHECK #{iteration} - {now}")
 
             # Get open positions
